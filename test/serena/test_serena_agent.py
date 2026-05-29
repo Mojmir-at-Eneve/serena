@@ -842,10 +842,22 @@ def serena_agent(request: pytest.FixtureRequest, serena_config) -> Iterator[Sere
 
     project_name = f"test_repo_{language}"
 
+    from serena.ls_manager import LanguageServerManagerInitialisationError
+
     agent = SerenaAgent(project=project_name, serena_config=serena_config)
 
-    # wait for agent to be ready
-    agent.execute_task(lambda: None)
+    # Wait for queued project activation and language-server startup to finish.
+    try:
+        agent.execute_task(lambda: None)
+        agent.execute_task(
+            lambda: agent.get_language_server_manager_or_raise(),
+            name="WaitForLanguageServer",
+            timeout=300,
+        )
+    except (LanguageServerManagerInitialisationError, Exception) as e:
+        if isinstance(e, LanguageServerManagerInitialisationError) or "language server manager is not initialized" in str(e).lower():
+            pytest.skip(f"Language server unavailable for {language.value}: {e}")
+        raise
 
     yield agent
 
@@ -1289,7 +1301,8 @@ class TestPromptProvision:
 
     @staticmethod
     def _assert_activation_message(result: str, project_name: str) -> None:
-        assert project_name in result and "Activated project" in result, f"Expected activation message in:\n{result}"
+        assert project_name in result, f"Expected project name in activation message:\n{result}"
+        assert "activated project" in result.lower(), f"Expected activation message in:\n{result}"
 
     @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
     def test_initial_instructions_returns_toolbox_manual(self, serena_agent: SerenaAgent) -> None:

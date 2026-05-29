@@ -327,6 +327,18 @@ def _determine_disabled_languages() -> list[Language]:
     if _sh.which("java") is None:
         result.append(Language.BSL)
 
+    if _sh.which("nix") is None:
+        result.append(Language.NIX)
+
+    if _sh.which("go") is None:
+        result.append(Language.GO)
+
+    if _sh.which("dotnet") is None:
+        result.append(Language.CSHARP)
+
+    if _sh.which("pwsh") is None and _sh.which("powershell") is None:
+        result.append(Language.POWERSHELL)
+
     return result
 
 

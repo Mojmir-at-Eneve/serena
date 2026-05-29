@@ -14,17 +14,11 @@ from sensai.util import logging
 from sensai.util.logging import LogTime
 
 from serena import serena_version
-from serena.config.serena_config import (
-    NamedToolInclusionDefinition,
-    RegisteredProject,
-    SerenaConfig,
-    SerenaPaths,
-    ToolInclusionDefinition,
-)
+from serena.config.serena_config import RegisteredProject, SerenaConfig, SerenaPaths, ToolInclusionDefinition
 from serena.ls_manager import LanguageServerManager
 from serena.project import Project
 from serena.task_executor import TaskExecutor
-from serena.tools import ActivateProjectTool, GetCurrentConfigTool, ReplaceContentTool, Tool, ToolMarker, ToolRegistry
+from serena.tools import ReplaceContentTool, Tool, ToolMarker, ToolRegistry
 from serena.util.inspection import iter_subclasses
 from serena.util.logging import MemoryLogHandler
 from solidlsp.ls_config import Language
@@ -184,12 +178,6 @@ class SerenaAgent:
         tool_inclusion_definitions: list[ToolInclusionDefinition] = [serena_config]
         if project is not None:
             tool_inclusion_definitions.append(project.project_config)
-            tool_inclusion_definitions.append(
-                NamedToolInclusionDefinition(
-                    name="SingleProjectExclusions",
-                    excluded_tools=[ActivateProjectTool.get_name_from_cls(), GetCurrentConfigTool.get_name_from_cls()],
-                )
-            )
         return ToolSet.default().apply(*tool_inclusion_definitions)
 
     def _check_shell_settings(self) -> None:
@@ -325,6 +313,10 @@ class SerenaAgent:
 
     def get_language_server_manager_or_raise(self) -> LanguageServerManager:
         return self.get_active_project_or_raise().get_language_server_manager_or_raise()
+
+    def is_using_language_server(self) -> bool:
+        """Serena is LSP-only; always True when a project is active."""
+        return True
 
     def get_active_lsp_languages(self) -> list[Language]:
         ls_manager = self.get_language_server_manager()

@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from logging import Logger
 from pathlib import Path
 from typing import Any, Literal
@@ -150,8 +151,12 @@ class TopLevelCommands(AutoRegisteringGroup):
         file_handler.formatter = formatter
         Logger.root.addHandler(file_handler)
 
+        if project_from_cwd and project is not None:
+            raise click.UsageError("--project-from-cwd cannot be used with --project")
         if project_from_cwd:
-            project = find_project_root() or project
+            project = find_project_root()
+            if project is None:
+                log.warning("No project root found from %s; not activating any project", os.getcwd())
 
         factory = SerenaMCPFactory(transport=transport, project=project, memory_log_handler=memory_log_handler)
         server = factory.create_mcp_server(
