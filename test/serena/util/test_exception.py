@@ -64,53 +64,19 @@ class TestHeadlessEnvironmentDetection:
 class TestShowFatalExceptionSafe:
     """Test class for safe fatal exception display functionality."""
 
-    @patch("serena.util.exception.is_headless_environment", return_value=True)
     @patch("serena.util.exception.log")
-    def test_show_fatal_exception_safe_headless(self, mock_log, mock_is_headless):
-        """Test that GUI is not attempted in headless environment."""
+    def test_show_fatal_exception_safe_logs_error(self, mock_log):
+        """Test that exceptions are logged."""
         test_exception = ValueError("Test error")
-
-        # The import should never happen in headless mode
-        with patch("serena.gui_log_viewer.show_fatal_exception") as mock_show_gui:
-            show_fatal_exception_safe(test_exception)
-            mock_show_gui.assert_not_called()
-
-        # Verify debug log about skipping GUI
-        mock_log.debug.assert_called_once_with("Skipping GUI error display in headless environment")
-
-    @patch("serena.util.exception.is_headless_environment", return_value=False)
-    @patch("serena.util.exception.log")
-    def test_show_fatal_exception_safe_with_gui(self, mock_log, mock_is_headless):
-        """Test that GUI is attempted when not in headless environment."""
-        test_exception = ValueError("Test error")
-
-        # Mock the GUI function
-        with patch("serena.gui_log_viewer.show_fatal_exception") as mock_show_gui:
-            show_fatal_exception_safe(test_exception)
-            mock_show_gui.assert_called_once_with(test_exception)
-
-    @patch("serena.util.exception.is_headless_environment", return_value=False)
-    @patch("serena.util.exception.log")
-    def test_show_fatal_exception_safe_gui_failure(self, mock_log, mock_is_headless):
-        """Test graceful handling when GUI display fails."""
-        test_exception = ValueError("Test error")
-        gui_error = ImportError("No module named 'tkinter'")
-
-        # Mock the GUI function to raise an exception
-        with patch("serena.gui_log_viewer.show_fatal_exception", side_effect=gui_error):
-            show_fatal_exception_safe(test_exception)
-
-        # Verify debug log about GUI failure
-        mock_log.debug.assert_called_with(f"Failed to show GUI error dialog: {gui_error}")
+        show_fatal_exception_safe(test_exception)
+        mock_log.error.assert_called_once()
 
     def test_show_fatal_exception_safe_prints_to_stderr(self):
         """Test that exceptions are always printed to stderr."""
         test_exception = ValueError("Test error message")
 
         with patch("sys.stderr", new_callable=MagicMock) as mock_stderr:
-            with patch("serena.util.exception.is_headless_environment", return_value=True):
-                with patch("serena.util.exception.log"):
-                    show_fatal_exception_safe(test_exception)
+            with patch("serena.util.exception.log"):
+                show_fatal_exception_safe(test_exception)
 
-        # Verify print was called with the correct arguments
         mock_stderr.write.assert_any_call("Fatal exception: Test error message")

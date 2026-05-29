@@ -20,7 +20,6 @@ GO_TEST_REPO = Path(REPO_ROOT) / "test" / "resources" / "repos" / "go" / "test_r
 def make_agent(project_root: Path, language: Language, project_name: str) -> SerenaAgent:
     """Create an LSP-backed Serena agent for a single explicit project."""
     serena_config = SerenaConfig.from_config_file()
-    serena_config.web_dashboard = False
     serena_config.language_backend = LanguageBackend.LSP
 
     project = Project(

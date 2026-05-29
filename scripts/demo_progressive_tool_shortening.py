@@ -166,7 +166,6 @@ def run_jb_tools(agent: SerenaAgent) -> None:
 
 def make_agent(backend: LanguageBackend) -> SerenaAgent:
     config = SerenaConfig.from_config_file()
-    config.web_dashboard = False
     config.language_backend = backend
     return SerenaAgent(project=REPO_ROOT, serena_config=config)
 

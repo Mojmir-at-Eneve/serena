@@ -33,7 +33,6 @@ EDIT_RESULT_PREFIX = "Edit introduced new warning-or-higher diagnostics: "
 def make_agent() -> SerenaAgent:
     """Create an LSP-backed Serena agent for the Serena repository."""
     serena_config = SerenaConfig.from_config_file()
-    serena_config.web_dashboard = False
     serena_config.language_backend = LanguageBackend.LSP
 
     project = Project(

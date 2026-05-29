@@ -22,7 +22,6 @@ SERVICES_FILE = Path("test_repo") / "services.py"
 def make_agent(project_root: Path, language: Language, project_name: str) -> SerenaAgent:
     """Create an LSP-backed Serena agent for a single explicit project."""
     serena_config = SerenaConfig.from_config_file()
-    serena_config.web_dashboard = False
     serena_config.language_backend = LanguageBackend.LSP
 
     project = Project(

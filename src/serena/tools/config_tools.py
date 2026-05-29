@@ -2,21 +2,7 @@ from sensai.util.helper import mark_used
 
 from serena.tools import Tool, ToolMarkerDoesNotRequireActiveProject, ToolMarkerOptional
 
-
-class OpenDashboardTool(Tool, ToolMarkerOptional, ToolMarkerDoesNotRequireActiveProject):
-    """
-    Opens the Serena web dashboard in the default web browser.
-    The dashboard provides logs, session information, and tool usage statistics.
-    """
-
-    def apply(self) -> str:
-        """
-        Opens the Serena web dashboard in the default web browser.
-        """
-        if self.agent.open_dashboard():
-            return f"Serena web dashboard has been opened in the user's default web browser: {self.agent.get_dashboard_url()}"
-        else:
-            return f"Serena web dashboard could not be opened automatically; tell the user to open it via {self.agent.get_dashboard_url()}"
+# OpenDashboardTool removed: web dashboard is not part of the internal MCP deployment.
 
 
 class ActivateProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):

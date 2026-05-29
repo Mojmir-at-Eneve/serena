@@ -1,24 +1,22 @@
 """
-The Serena Model Context Protocol (MCP) Server
+Serena agent: orchestrates MCP tools, projects, and language-server backends.
+
+Internal deployment note: the web dashboard, GUI log viewer, startup usage telemetry
+(oraios-software.de), and per-tool usage statistics were removed so the process does not
+emit outbound analytics or host optional UI services. Logs use stderr and the session log file.
 """
 
 import json
-import multiprocessing
 import os
 import platform
 import signal
-import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
 from logging import Logger
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TypeVar
 
-import requests
-import webview
 from sensai.util import logging
 from sensai.util.helper import mark_used
 from sensai.util.logging import LogTime
@@ -26,7 +24,6 @@ from sensai.util.string import dict_string
 
 from interprompt.jinja_template import JinjaTemplate
 from serena import serena_version
-from serena.analytics import RegisteredTokenCountEstimator, ToolUsageStats
 from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
 from serena.config.serena_config import (
     LanguageBackend,
@@ -39,7 +36,6 @@ from serena.config.serena_config import (
     SerenaPaths,
     ToolInclusionDefinition,
 )
-from serena.dashboard import SerenaDashboardAPI, SerenaDashboardTrayManager, SerenaDashboardViewer, open_url_in_browser
 from serena.ls_manager import LanguageServerManager
 from serena.memories.memory_manager import MemoryManager
 from serena.project import Project
@@ -49,20 +45,15 @@ from serena.tools import (
     ActivateProjectTool,
     GetCurrentConfigTool,
     OnboardingTool,
-    OpenDashboardTool,
     ReadMemoryTool,
     ReplaceContentTool,
     Tool,
     ToolMarker,
     ToolRegistry,
 )
-from serena.util.gui import system_has_usable_display
 from serena.util.inspection import iter_subclasses
 from serena.util.logging import MemoryLogHandler
 from solidlsp.ls_config import Language
-
-if TYPE_CHECKING:
-    from serena.gui_log_viewer import GuiLogViewer
 
 log = logging.getLogger(__name__)
 TTool = TypeVar("TTool", bound="Tool")
@@ -344,178 +335,6 @@ class ProjectPromptProvisionStatus:
         return self._get_session_status(session_id).project_activation_message_provided
 
 
-class DashboardManager:
-    class Mode(Enum):
-        BROWSER = "browser"
-        """
-        Open the dashboard in the default browser; supported on all platforms.
-        """
-        WEBVIEW = "app"
-        """
-        Open the dashboard via a native window (using pywebview) which minimises to the tray;
-        supported on Windows and macOS (but on macOS, tray apps for multiple instances accumulate 
-        in the top bar, which users may not want)
-        """
-        TRAY_MANAGER = "tray_manager"
-        """
-        Register dashboard instance with a central manager tray app (single tray icon for all instances), 
-        spawning the tray manager if not already running; supported on macOS and Windows.
-        """
-
-        @classmethod
-        def from_platform(cls) -> "DashboardManager.Mode":
-            match platform.system():
-                case "Windows":
-                    return cls.WEBVIEW
-                case "Darwin":
-                    # TODO: Switch to TRAY_MANAGER once support is tested
-                    return cls.BROWSER
-                case _:
-                    return cls.BROWSER
-
-        def is_supported(self) -> bool:
-            """
-            :return: whether the mode is supported on the current platform
-            """
-            if self == DashboardManager.Mode.WEBVIEW:
-                return SerenaDashboardViewer.is_current_platform_supported()
-            elif self == DashboardManager.Mode.TRAY_MANAGER:
-                return SerenaDashboardTrayManager.is_current_platform_supported()
-            else:
-                return True
-
-    def __init__(
-        self,
-        port: int,
-        host_listen_address: str,
-        open_dashboard_on_launch: bool,
-        active_project: Project | None = None,
-        mode_str: str | None = None,
-    ):
-        # determine requested mode
-        if mode_str is not None:
-            try:
-                mode = self.Mode(mode_str)
-            except ValueError:
-                mode = self.Mode.from_platform()
-                log.warning(f"Invalid dashboard interface mode '{mode_str}' specified; falling back to platform default '{mode.value}'.")
-        else:
-            mode = self.Mode.from_platform()
-
-        # check for mode compatibility
-        if not mode.is_supported():
-            fallback_mode = self.Mode.from_platform()
-            log.warning(
-                f"Dashboard interface mode '{mode.value}' is not supported on the current platform; "
-                "falling back to '{fallback_mode.value}'."
-            )
-            mode = fallback_mode
-
-        self._port = port
-        self._mode = mode
-        self._dashboard_viewer_process: multiprocessing.Process | None = None
-        self._tray_manager_lock = threading.Lock()
-
-        dashboard_host = host_listen_address
-        if dashboard_host == "0.0.0.0":
-            dashboard_host = "localhost"
-        self.url = f"http://{dashboard_host}:{port}/dashboard/index.html"
-
-        # handle startup
-        match self._mode:
-            case self.Mode.WEBVIEW:
-                self._start_dashboard_viewer(minimized=not open_dashboard_on_launch)
-            case self.Mode.TRAY_MANAGER:
-                init_fn = lambda: self._tray_manager_register(open_on_launch=open_dashboard_on_launch, active_project=active_project)
-                threading.Thread(target=init_fn, name="init-DashboardTrayManager", daemon=True).start()
-            case self.Mode.BROWSER:
-                if open_dashboard_on_launch:
-                    if not system_has_usable_display():
-                        log.info("Not opening the Serena dashboard because no usable display was detected.")
-                    else:
-                        self.open_dashboard_in_browser()
-
-    def open_dashboard_in_browser(self) -> None:
-        open_url_in_browser(self.url, use_subprocess=True)
-
-    @staticmethod
-    def _start_dashboard_viewer_process_function(url: str, minimized: bool, parent_process_id: int) -> None:
-        """
-        Main function of the subprocess for starting the dashboard viewer
-        """
-        try:
-            SerenaDashboardViewer(url, start_minimized=minimized, parent_process_id=parent_process_id).run()
-        except webview.errors.WebViewException as e:
-            log.warning(f"Could not open Serena Dashboard viewer. Cause:\n{e}")
-            # Fall back to opening the browser window if the window was supposed to be shown directly
-            if not minimized:
-                open_url_in_browser(url, use_subprocess=True)
-
-    def _start_dashboard_viewer(self, minimized: bool) -> None:
-        """
-        Starts the dashboard viewer (in a separate process) or, if the current platform does not support it,
-        opens the dashboard in the default web browser.
-
-        :param minimized: whether the dashboard viewer should be started minimized (if supported on the current platform).
-            If the viewer is not supported on the current platform, then this controls whether to open the browser window.
-        """
-        self._dashboard_viewer_process = multiprocessing.Process(
-            target=self._start_dashboard_viewer_process_function, args=(self.url, minimized, os.getpid()), daemon=True
-        )
-        self._dashboard_viewer_process.start()
-
-    def _tray_manager_register(self, open_on_launch: bool, active_project: Project | None) -> None:
-        """
-        Ensure the tray manager is running and register this dashboard instance with it.
-
-        If the current platform supports the native tray manager, this method starts
-        the manager (if not already running) and registers the instance. Otherwise,
-        it falls back to opening the dashboard in the default web browser.
-
-        :param open_on_launch: whether the dashboard should be opened immediately
-        """
-        with LogTime("Dashboard tray manager initialisation"):
-            with self._tray_manager_lock:
-                # ensure the singleton tray manager process is running
-                SerenaDashboardTrayManager.ensure_running()
-
-                # determine the current project name (if any)
-                project_name = active_project.project_name if active_project is not None else None
-
-                # register this instance with the tray manager
-                SerenaDashboardTrayManager.register_instance(
-                    port=self._port,
-                    dashboard_url=self.url,
-                    project=project_name,
-                    started_at=datetime.now().isoformat(timespec="seconds"),
-                    open_viewer=open_on_launch,
-                )
-
-    def shutdown(self) -> None:
-        """
-        Frees resources, terminating the dashboard viewer process (if any) and unregistering from the tray manager (if applicable).
-        """
-        if self._dashboard_viewer_process is not None:
-            log.info("Stopping the dashboard viewer process ...")
-            self._dashboard_viewer_process.terminate()
-            self._dashboard_viewer_process = None
-
-        if self._mode == self.Mode.TRAY_MANAGER:
-            with self._tray_manager_lock:
-                SerenaDashboardTrayManager.unregister_instance(port=self._port)
-
-    def update_active_project(self, active_project: Project | None) -> None:
-        """
-        Updates the active project (where applicable).
-
-        :param active_project: the currently active project or None if no project is active
-        """
-        if self._mode == self.Mode.TRAY_MANAGER:
-            with self._tray_manager_lock:
-                project_name = active_project.project_name if active_project is not None else None
-                SerenaDashboardTrayManager.update_project(port=self._port, project=project_name)
-
-
 class SerenaAgent:
     def __init__(
         self,
@@ -539,8 +358,6 @@ class SerenaAgent:
         """
         self._active_project: Project | None = None
         self._project_activation_callback = project_activation_callback
-        self._gui_log_viewer: Optional["GuiLogViewer"] = None
-        self._dashboard_manager: DashboardManager | None = None
         self._project_prompt_status = ProjectPromptProvisionStatus()
         self._session_mode_selection_definition = modes
         self.version = serena_version()
@@ -566,32 +383,9 @@ class SerenaAgent:
             log.info(f"Changing the root logger level to {serena_log_level}")
             Logger.root.setLevel(serena_log_level)
 
-        def get_memory_log_handler() -> MemoryLogHandler:
-            nonlocal memory_log_handler
-            if memory_log_handler is None:
-                memory_log_handler = MemoryLogHandler(level=serena_log_level)
-                Logger.root.addHandler(memory_log_handler)
-            return memory_log_handler
-
-        # open GUI log window if enabled
-        if self.serena_config.gui_log_window:
-            log.info("Opening GUI window")
-            if platform.system() == "Darwin":
-                log.warning("GUI log window is not supported on macOS")
-            else:
-                # even importing on macOS may fail if tkinter dependencies are unavailable (depends on Python interpreter installation
-                # which uv used as a base, unfortunately)
-                from serena.gui_log_viewer import GuiLogViewer
-
-                self._gui_log_viewer = GuiLogViewer(
-                    "dashboard",
-                    title="Serena Logs",
-                    memory_log_handler=get_memory_log_handler(),
-                    shutdown_handler=lambda: self.shutdown(),
-                )
-                self._gui_log_viewer.start()
-        else:
-            log.debug("GUI window is disabled")
+        if memory_log_handler is None:
+            memory_log_handler = MemoryLogHandler(level=serena_log_level)
+            Logger.root.addHandler(memory_log_handler)
 
         # set the agent context
         if context is None:
@@ -600,15 +394,6 @@ class SerenaAgent:
 
         # instantiate all tool classes
         self._all_tools: dict[type[Tool], Tool] = {tool_class: tool_class(self) for tool_class in ToolRegistry().get_all_tool_classes()}
-        tool_names = [tool.get_name_from_cls() for tool in self._all_tools.values()]
-
-        # If GUI log window is enabled, set the tool names for highlighting
-        if self._gui_log_viewer is not None:
-            self._gui_log_viewer.set_tool_names(tool_names)
-
-        token_count_estimator = RegisteredTokenCountEstimator[self.serena_config.token_count_estimator]
-        log.info(f"Will record tool usage statistics with token count estimator: {token_count_estimator.name}.")
-        self._tool_usage_stats = ToolUsageStats(token_count_estimator)
 
         # log fundamental information
         log.info(
@@ -658,46 +443,7 @@ class SerenaAgent:
         # update the active tools (considering the active project, if any)
         self._active_tools: AvailableTools
         self._update_active_tools()
-
-        # start the dashboard (web frontend), registering its log handler
-        # should be the last thing to happen in the initialization since the dashboard
-        # may access various parts of the agent
-        if self.serena_config.web_dashboard:
-            self._dashboard_thread, port = SerenaDashboardAPI(
-                get_memory_log_handler(),
-                tool_names,
-                agent=self,
-                tool_usage_stats=self._tool_usage_stats,
-                host=self.serena_config.web_dashboard_listen_address,
-            ).run_in_thread()
-            self._dashboard_manager = DashboardManager(
-                port,
-                self.serena_config.web_dashboard_listen_address,
-                self.serena_config.web_dashboard_open_on_launch,
-                self._active_project,
-                mode_str=self.serena_config.web_dashboard_interface,
-            )
-            log.info("Serena web dashboard started at %s", self._dashboard_manager.url)
-            # inform the GUI window (if any)
-            if self._gui_log_viewer is not None:
-                self._gui_log_viewer.set_dashboard_url(self._dashboard_manager.url)
-
-        self._send_usage_info()
-
-    def _send_usage_info(self) -> None:
-        if os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true" or os.getenv("SERENA_USAGE_REPORTING") == "false":
-            return
-        params: dict[str, str | int] = {
-            "os": platform.system(),
-            "dashboard": int(self.serena_config.web_dashboard),
-            "version": self.version,
-            "backend": self._language_backend.value,
-            "context": self._context.name,
-        }
-        try:
-            requests.get("https://oraios-software.de/serena_usage.php", params=params, timeout=1)
-        except Exception as e:
-            log.debug(f"Failed to send usage info: {e}")
+        # No dashboard/GUI startup here: internal MCP-only use; see module docstring.
 
     @classmethod
     def _create_base_toolset(
@@ -711,19 +457,13 @@ class SerenaAgent:
         """
         Determines the base toolset defining the set of exposed tools (which e.g. the MCP shall see).
         It depends on ...
-           * dashboard availability/opening on launch
            * Serena config
            * the context (which is fixed for the session)
            * the optional tools enabled by initial modes
            * single-project mode reductions (if applicable)
            * JetBrains mode
         """
-        # determine whether to include the OpenDashboardTool based on the Serena configuration
         tool_inclusion_definitions: list[ToolInclusionDefinition] = []
-        if serena_config.web_dashboard and not serena_config.web_dashboard_open_on_launch and not serena_config.gui_log_window:
-            tool_inclusion_definitions.append(
-                NamedToolInclusionDefinition(name="OpenDashboard", included_optional_tools=[OpenDashboardTool.get_name_from_cls()])
-            )
 
         # consider Serena configuration and the active context
         tool_inclusion_definitions.append(serena_config)
@@ -811,14 +551,10 @@ class SerenaAgent:
         return active_project.get_language_server_manager_or_raise()
 
     def get_log_inspection_instructions(self) -> str:
-        if self.serena_config.web_dashboard:
-            return f"Live logs can be inspected via the dashboard at {self.get_dashboard_url()}"
-        else:
-            log_path = SerenaPaths().last_returned_log_file_path
-            if log_path is not None:
-                return f"Find the current log file here: {log_path}"
-            else:
-                return "Unfortunately, logs are not available. We recommend enabling the web dashboard/logging in general."
+        log_path = SerenaPaths().last_returned_log_file_path
+        if log_path is not None:
+            return f"Find the current log file here: {log_path}"
+        return "Logs are written to the Serena log file configured for this session."
 
     def get_context(self) -> SerenaAgentContext:
         return self._context
@@ -835,40 +571,6 @@ class SerenaAgent:
             if "bash" in comspec:
                 os.environ["COMSPEC"] = ""  # force use of default shell
                 log.info("Adjusting COMSPEC environment variable to use the default shell instead of '%s'", comspec)
-
-    def record_tool_usage(self, input_kwargs: dict, tool_result: str | dict, tool: Tool) -> None:
-        """
-        Record the usage of a tool with the given input and output strings if tool usage statistics recording is enabled.
-        """
-        tool_name = tool.get_name()
-        input_str = str(input_kwargs)
-        output_str = str(tool_result)
-        log.debug(f"Recording tool usage for tool '{tool_name}'")
-        self._tool_usage_stats.record_tool_usage(tool_name, input_str, output_str)
-
-    def get_dashboard_url(self) -> str | None:
-        """
-        :return: the URL of the web dashboard, or None if the dashboard is not running
-        """
-        if self._dashboard_manager is None:
-            return None
-        return self._dashboard_manager.url
-
-    def open_dashboard(self) -> bool:
-        """
-        Opens the Serena dashboard (for on-demand usage as triggered by the user, e.g. via a tool)
-
-        :return: True if the dashboard was opened, False if it could not be opened
-        """
-        if self._dashboard_manager is None:
-            raise Exception("Dashboard is not running.")
-
-        if not system_has_usable_display():
-            log.warning("Not opening the Serena web dashboard because no usable display was detected.")
-            return False
-
-        self._dashboard_manager.open_dashboard_in_browser()
-        return True
 
     def get_exposed_tool_instances(self) -> list["Tool"]:
         """
@@ -1134,10 +836,6 @@ class SerenaAgent:
         if self._project_activation_callback is not None:
             self._project_activation_callback()
 
-        # notify the dashboard manager of the project change (if applicable)
-        if self._dashboard_manager:
-            self._dashboard_manager.update_active_project(self._active_project)
-
         return True
 
     def activate_project_from_path_or_name(
@@ -1277,13 +975,6 @@ class SerenaAgent:
             log.info(f"Shutting down active project '{self._active_project.project_name}' ...")
             self._active_project.shutdown(timeout=timeout)
             self._active_project = None
-        if self._gui_log_viewer:
-            log.info("Stopping the GUI log window ...")
-            self._gui_log_viewer.stop()
-            self._gui_log_viewer = None
-        if self._dashboard_manager:
-            self._dashboard_manager.shutdown()
-            self._dashboard_manager = None
 
     def shutdown(self) -> None:
         """

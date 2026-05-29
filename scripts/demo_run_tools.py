@@ -24,7 +24,6 @@ from serena.tools import (
 
 if __name__ == "__main__":
     serena_config = SerenaConfig.from_config_file()
-    serena_config.web_dashboard = False
     serena_config.language_backend = LanguageBackend.LSP
     # project = Path(REPO_ROOT).parent / "serena-jetbrains-plugin-copy"
     project = Path(REPO_ROOT)

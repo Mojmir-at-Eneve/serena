@@ -114,7 +114,7 @@ def start_default_ls_context(language: Language) -> Iterator[SolidLanguageServer
 
 
 def create_default_serena_config():
-    return SerenaConfig(gui_log_window=False, web_dashboard=False)
+    return SerenaConfig()
 
 
 def _create_default_project(language: Language, repo_root_override: str | None = None) -> Project:

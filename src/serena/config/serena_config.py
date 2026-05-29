@@ -340,7 +340,7 @@ class ProjectConfig(SharedConfig, ModeSelectionDefinitionWithAddedModes):
                         "No source files for supported language servers were found in %s. "
                         "Creating project with no configured languages. "
                         "Symbol-related tools (e.g. find_symbol, get_symbols_overview) will not work "
-                        "when using the LSP backend. You can add languages later via the Serena dashboard "
+                        "when using the LSP backend. You can add languages later via project configuration "
                         "or by manually editing the project configuration.",
                         project_root,
                     )
@@ -711,25 +711,19 @@ class SerenaConfig(SharedConfig, ModeSelectionDefinitionWithBaseModes):
     """
 
     # *** fields that are mapped directly to/from the configuration file (DO NOT RENAME) ***
+    # Internal deployment: web_dashboard / gui_log_window keys were removed from the schema
+    # (legacy YAML keys are ignored). No dashboard bind address or open-on-launch settings.
 
     projects: list[RegisteredProject] = field(default_factory=list)
-    gui_log_window: bool = False
     log_level: int = logging.INFO
     trace_lsp_communication: bool = False
-    web_dashboard: bool = True
-    web_dashboard_open_on_launch: bool = True
-    web_dashboard_interface: str | None = None
-    web_dashboard_listen_address: str = "127.0.0.1"
     jetbrains_plugin_server_address: str = "127.0.0.1"
     tool_timeout: float = DEFAULT_TOOL_TIMEOUT
 
     token_count_estimator: str = RegisteredTokenCountEstimator.CHAR_COUNT.name
-    """Only relevant if `record_tool_usage` is True; the name of the token count estimator to use for tool usage statistics.
-    See the `RegisteredTokenCountEstimator` enum for available options.
-    
-    Note: some token estimators (like tiktoken) may require downloading data files
-    on the first run, which can take some time and require internet access. Others, like the Anthropic ones, may require an API key
-    and rate limits may apply.
+    """Name of the token count estimator (see `RegisteredTokenCountEstimator`). Reserved for future use.
+
+    Note: tiktoken may download data files on first run; CHAR_COUNT requires no network access.
     """
     default_max_tool_answer_chars: int = 150_000
     """Used as default for tools where the apply method has a default maximal answer length.

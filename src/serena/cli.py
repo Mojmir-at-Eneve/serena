@@ -273,29 +273,6 @@ class TopLevelCommands(AutoRegisteringGroup):
         "--port", type=int, default=8000, show_default=True, help="Listen port for the MCP server (when using corresponding transport)."
     )
     @click.option(
-        "--enable-web-dashboard",
-        type=bool,
-        is_flag=False,
-        default=None,
-        help="Enable the web dashboard (overriding the setting in Serena's config). "
-        "It is recommended to always enable the dashboard. If you don't want the browser to open on startup, set open-web-dashboard to False. "
-        "For more information, see\nhttps://oraios.github.io/serena/02-usage/060_dashboard.html",
-    )
-    @click.option(
-        "--enable-gui-log-window",
-        type=bool,
-        is_flag=False,
-        default=None,
-        help="Enable the gui log window (currently only displays logs; overriding the setting in Serena's config).",
-    )
-    @click.option(
-        "--open-web-dashboard",
-        type=bool,
-        is_flag=False,
-        default=None,
-        help="Open Serena's dashboard in your browser after MCP server startup (overriding the setting in Serena's config).",
-    )
-    @click.option(
         "--log-level",
         type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
         default=None,
@@ -320,9 +297,6 @@ class TopLevelCommands(AutoRegisteringGroup):
         transport: Literal["stdio", "sse", "streamable-http"],
         host: str,
         port: int,
-        enable_web_dashboard: bool | None,
-        open_web_dashboard: bool | None,
-        enable_gui_log_window: bool | None,
         log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None,
         trace_lsp_communication: bool | None,
         tool_timeout: float | None,
@@ -330,7 +304,7 @@ class TopLevelCommands(AutoRegisteringGroup):
         from serena.mcp import SerenaMCPFactory
 
         # initialize logging, using INFO level initially (will later be adjusted by SerenaAgent according to the config)
-        #   * memory log handler (for use by GUI/Dashboard)
+        #   * memory log handler
         #   * stream handler for stderr (for direct console output, which will also be captured by clients like Claude Desktop)
         #   * file handler
         # (Note that stdout must never be used for logging, as it is used by the MCP server to communicate with the client.)
@@ -371,9 +345,6 @@ class TopLevelCommands(AutoRegisteringGroup):
             port=port,
             mode_selection_def=mode_selection_def,
             language_backend=LanguageBackend.from_str(language_backend) if language_backend else None,
-            enable_web_dashboard=enable_web_dashboard,
-            open_web_dashboard=open_web_dashboard,
-            enable_gui_log_window=enable_gui_log_window,
             log_level=log_level,
             trace_lsp_communication=trace_lsp_communication,
             tool_timeout=tool_timeout,
@@ -425,7 +396,6 @@ class TopLevelCommands(AutoRegisteringGroup):
         if modes:
             modes_selection_def = ModeSelectionDefinition(default_modes=modes)
         serena_config = SerenaConfig.from_config_file()
-        serena_config.web_dashboard = False
         print(serena_config.default_modes)
         print(serena_config.base_modes)
 
@@ -495,21 +465,6 @@ class TopLevelCommands(AutoRegisteringGroup):
         if port is not None:
             run_kwargs["port"] = port
         server.run(**run_kwargs)
-
-    @staticmethod
-    @click.command(
-        "dashboard-viewer",
-        help="Open the Serena dashboard viewer for a given URL.",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    @click.argument("url", type=str)
-    @click.option("--width", type=int, default=1400, show_default=True, help="Window width.")
-    @click.option("--height", type=int, default=900, show_default=True, help="Window height.")
-    def dashboard_viewer(url: str, width: int, height: int) -> None:
-        from serena.dashboard import SerenaDashboardViewer
-
-        viewer = SerenaDashboardViewer(url, width=width, height=height)
-        viewer.run()
 
 
 class ModeCommands(AutoRegisteringGroup):
@@ -925,8 +880,6 @@ class ProjectCommands(AutoRegisteringGroup):
         project_path = os.path.abspath(project)
         serena_config = SerenaConfig.from_config_file()
         serena_config.language_backend = LanguageBackend.LSP
-        serena_config.gui_log_window = False
-        serena_config.web_dashboard = False
         proj = Project.load(project_path, serena_config=serena_config)
 
         # Create log file with timestamp
@@ -939,8 +892,7 @@ class ProjectCommands(AutoRegisteringGroup):
             log.info("Starting health check for project: %s", project_path)
 
             try:
-                # Create SerenaAgent with dashboard disabled
-                log.info("Creating SerenaAgent with disabled dashboard...")
+                log.info("Creating SerenaAgent...")
 
                 agent = SerenaAgent(project=project_path, serena_config=serena_config)
                 log.info("SerenaAgent created successfully")
@@ -1108,7 +1060,7 @@ class ToolCommands(AutoRegisteringGroup):
 
         agent = SerenaAgent(
             project=None,
-            serena_config=SerenaConfig(web_dashboard=False, log_level=logging.INFO),
+            serena_config=SerenaConfig(log_level=logging.INFO),
             context=serena_context,
         )
         tool = agent.get_tool_by_name(tool_name)

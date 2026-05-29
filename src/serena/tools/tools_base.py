@@ -369,8 +369,7 @@ class Tool(Component):
                     else:
                         raise
 
-                # record tool usage
-                self.agent.record_tool_usage(apply_kwargs, result, self)
+                # Per-tool usage stats were removed with the dashboard (no outbound/local aggregation UI).
 
             except Exception as e:
                 if not catch_exceptions:

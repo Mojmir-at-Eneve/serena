@@ -48,8 +48,6 @@ class ProjectServer:
         from serena.agent import SerenaAgent
 
         serena_config = SerenaConfig.from_config_file()
-        serena_config.gui_log_window = False
-        serena_config.web_dashboard = False
         serena_config.language_backend = LanguageBackend.LSP
 
         self._agent = SerenaAgent(serena_config=serena_config)
