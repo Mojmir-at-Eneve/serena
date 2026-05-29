@@ -12,7 +12,12 @@ operate on real language-server facts rather than fragile text guessing.
 
 ## Before you start
 
-1. Call `activate_project` with the project path or registered project name.
+1. **Project activation.** MCP is often configured without a fixed project path in `mcp.json`.
+   The server may auto-detect a project from its working directory at startup. If tools report
+   "No active project", call `activate_project` with the **IDE workspace root path** (absolute path
+   from the host environment). Use `activate_project` with ``.`` or an empty path only when the
+   server cwd is the workspace root. This creates `.serena/project.yml` if missing; you do not need
+   a separate `serena project create` step first.
 2. Prefer symbolic tools over raw file grep/read when exploring code structure.
 3. Line numbers returned by Serena tools are **0-based**.
 

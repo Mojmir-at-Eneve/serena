@@ -48,11 +48,13 @@ For a minimal local smoke test (not how IDEs run day to day):
 
     serena start-mcp-server
 
-With a fixed project:
+With no `--project`, Serena **auto-detects** the project root from the process working directory (`.serena/project.yml` or `.git`). Use an explicit path only when debugging or when cwd is not the workspace:
 
     serena start-mcp-server --project /absolute/path/to/project
 
-See [Configuring Your MCP Client](030_clients) for client-specific `mcp.json` examples, including [Cursor](030_clients#cursor).
+If auto-detection fails at startup, the host agent should call `activate_project` with the IDE workspace path (see [Cursor](030_clients#cursor)).
+
+See [Configuring Your MCP Client](030_clients) for path-free `mcp.json` examples.
 
 (streamable-http)=
 ### Streamable HTTP Mode
@@ -92,11 +94,9 @@ to get a list of all available options.
 
 Some useful options include:
 
-  * `--project <path|name>`: specify the project to work on by name or path.
-  * `--project-from-cwd`: auto-detect the project from current working directory     
-    (looking for a directory containing `.serena/project.yml` or `.git` in parent directories and activating the containing directory as the project root, if any).
-    This option is intended for CLI-based agents like Claude Code, Gemini and Codex, which are typically started from within the project directory
-    and which do not change directories during their operation.
+  * `--project <path|name>`: optional explicit project; overrides cwd auto-detection.
+  * **Default (no `--project`)**: auto-detect from the server working directory (``.serena/project.yml`` or ``.git``). If nothing is found, the agent can activate via the `activate_project` tool.
+  * `--project-from-cwd`: deprecated alias for the default behaviour when `--project` is omitted.
   * `--transport <stdio|streamable-http|sse>`: communication protocol (stdio is the default for IDE clients).
   * `--log-level`, `--trace-lsp-communication`, `--tool-timeout`: override values from [configuration](050_configuration).
 

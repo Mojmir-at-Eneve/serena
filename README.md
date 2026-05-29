@@ -25,7 +25,20 @@ There is **no** bundled agent persona, memory system, JetBrains plugin integrati
 
 **Prerequisites:** [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-Serena’s default transport is **stdio**. Your MCP client (Cursor, Claude Code, VS Code, and similar) **starts Serena automatically** from `mcp.json` when it needs the server. You do **not** need a separate terminal running `serena start-mcp-server` for normal IDE use.
+Serena is installed **locally from a clone** of this repository (not via `uvx` or PyPI). Your MCP client starts Serena automatically from `mcp.json` over **stdio**; you do **not** need a separate terminal running `serena start-mcp-server` for normal IDE use.
+
+### Install locally
+
+Clone once and install the `serena` CLI on your machine (replace the path with where you keep the repo):
+
+```bash
+git clone https://github.com/oraios/serena.git /path/to/serena
+cd /path/to/serena
+uv sync
+uv tool install -p 3.13 .
+```
+
+After this, `serena` should be on your PATH. To refresh after pulling changes: `uv sync && uv tool install --reinstall -p 3.13 .`
 
 ### One-time setup
 
@@ -33,12 +46,12 @@ Run these once on your machine (not each time you open the editor):
 
 ```bash
 # Initialize global config (~/.serena/serena_config.yml)
-uvx --from git+https://github.com/oraios/serena serena init
+serena init
 
-# Register and index a project
+# Register and index a project you want to work on
 cd /path/to/your/project
-uvx --from git+https://github.com/oraios/serena serena project create
-uvx --from git+https://github.com/oraios/serena serena project index   # optional but recommended
+serena project create
+serena project index   # optional but recommended
 ```
 
 Indexing warms language-server caches and can speed up the first real session.
@@ -46,44 +59,55 @@ Indexing warms language-server caches and can speed up the first real session.
 ### Connect your MCP client
 
 Add Serena to your client’s MCP configuration. The client spawns the process and talks over stdin/stdout.
+You do **not** need a project path in `mcp.json`.
 
-**Cursor** (user or workspace `mcp.json`):
+**Cursor** (user or workspace `mcp.json`) — path-free, uses the locally installed `serena` command:
 
 ```json
 {
   "mcpServers": {
     "serena": {
-      "command": "uvx",
+      "command": "serena",
+      "args": ["start-mcp-server"]
+    }
+  }
+}
+```
+
+At startup Serena **auto-detects** the project from the MCP subprocess working directory (`.serena/project.yml` or `.git` in cwd or parents). If detection fails (for example with a global MCP config whose cwd is not the workspace), the agent should call **`activate_project`** with the IDE workspace root path; that also creates `.serena/project.yml` when missing.
+
+**Without a global `serena` install**, point MCP at `uv run` in your Serena clone (still no project path in args):
+
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "uv",
       "args": [
-        "--from", "git+https://github.com/oraios/serena",
-        "serena", "start-mcp-server",
-        "--project", "/absolute/path/to/your/project"
+        "run",
+        "--directory", "/path/to/serena",
+        "serena", "start-mcp-server"
       ]
     }
   }
 }
 ```
 
-- **`--project`** — fixed absolute path to the repo Serena should use. Best when the MCP entry is tied to one workspace.
-- **`--project-from-cwd`** — Serena detects the project from the server process’s working directory (`.serena/project.yml` or `.git` in the current directory or parents). Use when the client always launches the server from the project root.
+Optional override for debugging: `serena start-mcp-server --project /absolute/path/to/project`.
 
-Contributors working inside the Serena repo can commit a **project-level** `.cursor/mcp.json` so MCP settings travel with the clone.
+Contributors can commit a **project-level** `.cursor/mcp.json` in this repo so MCP settings travel with the clone.
 
 If the host already exposes tools that overlap with Serena’s, tune the tool set via `excluded_tools` or `included_optional_tools` in [configuration](docs/02-usage/050_configuration.md) (see also **Default tools** below).
 
 ### When you start the server yourself
 
-Only needed for **HTTP/SSE transport** (you run the server and point the client at a URL) or **debugging** from a terminal. See [Running the MCP Server](docs/02-usage/020_running.md) and [Connecting Your MCP Client](docs/02-usage/030_clients.md).
-
-### Developing Serena from source
-
-From a clone, run the server through `uv` (replace paths with yours):
+Only needed for **HTTP/SSE transport** (you run the server and point the client at a URL) or **debugging** from a terminal:
 
 ```bash
-uv run --directory /path/to/serena serena start-mcp-server --project /path/to/workspace
+serena start-mcp-server --project /path/to/your/project
 ```
 
-Use the same command line in your MCP client’s `command` / `args` when wiring Cursor or another client to your local checkout.
+See [Running the MCP Server](docs/02-usage/020_running.md) and [Connecting Your MCP Client](docs/02-usage/030_clients.md).
 
 ## Default tools
 
@@ -111,10 +135,14 @@ Agent (Cursor, Claude Code, …) ──MCP──► serena.mcp ──► SerenaA
 
 ## Development
 
+From your local clone:
+
 ```bash
 uv sync --extra dev
 uv run pytest test/serena/ test/solidlsp/python/ -q
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow.
 
 ## License
 

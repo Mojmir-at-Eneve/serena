@@ -1,5 +1,6 @@
 from sensai.util.helper import mark_used
 
+from serena.cli import resolve_project_for_activation
 from serena.tools import Tool, ToolMarkerDoesNotRequireActiveProject, ToolMarkerOptional
 
 # OpenDashboardTool removed: web dashboard is not part of the internal MCP deployment.
@@ -12,13 +13,19 @@ class ActivateProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
 
     # noinspection PyIncorrectDocstring
     # (session_id is injected via apply_ex)
-    def apply(self, project: str, session_id: str) -> str:
+    def apply(self, project: str = "", session_id: str = "") -> str:
         """
         Activates the project with the given name or path.
 
-        :param project: the name of a registered project to activate or a path to a project directory
+        :param project: registered project name, absolute path to the project directory, or empty/``.``
+            to auto-detect from the server working directory. When MCP is configured without a fixed
+            project path, pass the IDE workspace root path from the host environment.
         """
-        is_new_activation = self.agent.activate_project_from_path_or_name(project)
+        try:
+            resolved_project = resolve_project_for_activation(project)
+        except ValueError as e:
+            return f"Error: {e}"
+        is_new_activation = self.agent.activate_project_from_path_or_name(resolved_project)
         mark_used(is_new_activation)
         result = self.agent.get_project_activation_message()
         result += "\nCall `initial_instructions` if you have not yet read the Serena toolbox manual."

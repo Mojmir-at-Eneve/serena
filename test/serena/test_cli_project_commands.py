@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from serena.cli import ProjectCommands, TopLevelCommands, find_project_root
+from serena.cli import (
+    ProjectCommands,
+    TopLevelCommands,
+    find_project_root,
+    resolve_project_for_activation,
+    resolve_project_root_for_startup,
+)
 from serena.config.serena_config import ProjectConfig
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
@@ -325,6 +331,43 @@ class TestFindProjectRoot:
             os.chdir(subdir)
             result = find_project_root(root=temp_project_dir)
             assert result is None
+        finally:
+            os.chdir(original_cwd)
+
+
+class TestResolveProjectRoot:
+    """Tests for startup and activation project resolution helpers."""
+
+    def test_resolve_project_root_for_startup_uses_explicit_project(self) -> None:
+        assert resolve_project_root_for_startup("/explicit/path") == "/explicit/path"
+
+    def test_resolve_project_root_for_startup_detects_from_cwd(self, temp_project_dir) -> None:
+        os.makedirs(os.path.join(temp_project_dir, ".git"))
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(temp_project_dir)
+            assert resolve_project_root_for_startup(None) == str(Path(temp_project_dir).resolve())
+        finally:
+            os.chdir(original_cwd)
+
+    def test_resolve_project_for_activation_dot_uses_cwd(self, temp_project_dir) -> None:
+        os.makedirs(os.path.join(temp_project_dir, ".git"))
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(temp_project_dir)
+            assert resolve_project_for_activation(".") == str(Path(temp_project_dir).resolve())
+            assert resolve_project_for_activation("") == str(Path(temp_project_dir).resolve())
+        finally:
+            os.chdir(original_cwd)
+
+    def test_resolve_project_for_activation_raises_when_undetectable(self, temp_project_dir) -> None:
+        subdir = os.path.join(temp_project_dir, "src")
+        os.makedirs(subdir)
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+            with pytest.raises(ValueError, match="IDE workspace root path"):
+                resolve_project_for_activation(".")
         finally:
             os.chdir(original_cwd)
 

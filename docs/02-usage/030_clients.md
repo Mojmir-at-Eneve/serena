@@ -7,12 +7,12 @@ Serena works with any MCP client that can launch a stdio server or connect to HT
 
 1. Add a custom MCP server in your client (see the client's documentation).
 2. Configure either:
-   - a **stdio** launch command: `serena start-mcp-server` with optional `--project` or `--project-from-cwd`, or
+   - a **stdio** launch command: `serena start-mcp-server` (no project path required in `mcp.json`), or
    - an **HTTP/SSE** URL after you start the server manually ([Running the MCP Server](020_running#streamable-http)).
 
 Adjust behaviour via [configuration](050_configuration) and [command-line options](mcp-args).
 
-**Per-workspace vs global.** Some clients (Cursor, VS Code, Claude Code) use per-workspace MCP config; others use a global file. With a fixed workspace, prefer `--project` with an absolute path. With a global config, use `--project-from-cwd` or ask the agent to activate a project via the `activate_project` tool.
+**Project binding without paths in MCP config.** By default the server auto-detects a project from its working directory at startup. If that fails, the agent should call `activate_project` with the IDE workspace root path (see [Cursor](#cursor)). Optional `--project` remains for explicit overrides.
 
 **Tool selection.** Prefer tuning `excluded_tools` / `included_optional_tools` in Serena's config rather than disabling tools only in the client UI.
 
@@ -31,7 +31,7 @@ Adjust behaviour via [configuration](050_configuration) and [command-line option
 Cursor spawns the MCP server from `mcp.json`. **Do not** run `serena start-mcp-server` in a terminal for normal stdio use.
 
 1. **Cursor Settings → MCP** (or edit `.cursor/mcp.json`).
-2. Add a stdio server with `serena start-mcp-server` and your project path.
+2. Add a stdio server with only `serena start-mcp-server` in `args` (no project path).
 
 **Installed via `uv tool install`:**
 
@@ -40,16 +40,13 @@ Cursor spawns the MCP server from `mcp.json`. **Do not** run `serena start-mcp-s
   "mcpServers": {
     "serena": {
       "command": "serena",
-      "args": [
-        "start-mcp-server",
-        "--project", "/absolute/path/to/your/project"
-      ]
+      "args": ["start-mcp-server"]
     }
   }
 }
 ```
 
-**From a cloned repo:**
+**From a cloned Serena repo** (only the Serena install path is fixed, not the workspace):
 
 ```json
 {
@@ -59,17 +56,20 @@ Cursor spawns the MCP server from `mcp.json`. **Do not** run `serena start-mcp-s
       "args": [
         "run",
         "--directory", "/absolute/path/to/serena",
-        "serena", "start-mcp-server",
-        "--project", "/absolute/path/to/your/workspace"
+        "serena", "start-mcp-server"
       ]
     }
   }
 }
 ```
 
-Use `--project-from-cwd` only if you have verified Cursor sets the subprocess working directory to the workspace root.
+**How the workspace is chosen**
 
-One-time in the repo: `serena project create` and optionally `serena project index`.
+- **Startup:** Serena walks up from the MCP subprocess cwd looking for `.serena/project.yml` or `.git`. This works when Cursor launches the server with cwd set to the workspace root (typical for workspace-scoped MCP).
+- **Agent fallback:** If tools report “No active project”, ask the agent to call `activate_project` with the workspace root path from the IDE. The tool registers the project and creates `.serena/project.yml` if needed.
+- **Verify:** Check MCP server logs for `Using project root …` or the warning that auto-detection failed.
+
+One-time on the machine: `serena init`. Optional: `serena project index` in the repo for faster first session.
 
 ## Claude Code
 

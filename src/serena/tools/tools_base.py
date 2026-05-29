@@ -319,9 +319,12 @@ class Tool(Component):
                 # check whether the tool requires an active project and language server
                 if not isinstance(self, ToolMarkerDoesNotRequireActiveProject):
                     if self.agent.get_active_project() is None:
+                        known = self.agent.serena_config.project_names
+                        known_hint = f" Known projects: {known}." if known else ""
                         return (
-                            "Error: No active project. Ask the user to provide the project path or to select a project from this list of known projects: "
-                            + f"{self.agent.serena_config.project_names}"
+                            "Error: No active project. Call `activate_project` with the IDE workspace root path "
+                            "(absolute path to the project directory)."
+                            + known_hint
                         )
 
                 # construct apply kwargs, adding session_id if the tool is session-aware

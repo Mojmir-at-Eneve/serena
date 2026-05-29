@@ -1320,3 +1320,43 @@ class TestPromptProvision:
 
         result2 = self._call_tool(serena_agent, ActivateProjectTool, project=project_name, session_id=session)
         self._assert_activation_message(result2, project_name)
+
+    def test_activate_project_from_cwd_when_no_path_given(self, serena_config) -> None:
+        repo_path = get_repo_path(Language.PYTHON)
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(repo_path)
+            result = self._call_tool(agent, ActivateProjectTool, project=".", session_id="s1")
+            self._assert_activation_message(result, "test_repo_python")
+            assert agent.get_active_project() is not None
+            assert os.path.samefile(agent.get_active_project().project_root, repo_path)
+        finally:
+            os.chdir(original_cwd)
+            agent.on_shutdown(timeout=5)
+
+    def test_no_active_project_error_mentions_activate_project(self, serena_config) -> None:
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        try:
+            result = self._call_tool(
+                agent,
+                FindSymbolTool,
+                name_path_pattern="foo",
+                relative_path="bar.py",
+                include_body=False,
+            )
+            assert "No active project" in result
+            assert "activate_project" in result
+            assert "workspace root path" in result
+        finally:
+            agent.on_shutdown(timeout=5)
+
+    def test_initial_instructions_describes_path_free_activation(self, serena_config) -> None:
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        try:
+            result = agent.get_tool(InitialInstructionsTool).apply()
+            assert "mcp.json" in result.lower() or "MCP" in result
+            assert "activate_project" in result
+            assert "workspace root path" in result
+        finally:
+            agent.on_shutdown(timeout=5)

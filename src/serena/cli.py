@@ -60,6 +60,33 @@ def find_project_root(root: str | Path | None = None) -> str | None:
     return None
 
 
+def resolve_project_root_for_startup(explicit_project: str | None) -> str | None:
+    """Resolve the project to activate when the MCP server starts.
+
+    Uses an explicit ``--project`` when provided; otherwise auto-detects from the
+    server process working directory (``.serena/project.yml`` or ``.git``).
+    """
+    if explicit_project is not None:
+        return explicit_project
+    return find_project_root()
+
+
+def resolve_project_for_activation(project: str | None) -> str:
+    """Resolve the project argument for :class:`ActivateProjectTool`.
+
+    Empty, whitespace-only, or ``"."`` means detect from the server cwd.
+    """
+    if project is not None and project.strip() and project.strip() != ".":
+        return project.strip()
+    detected = find_project_root()
+    if detected is None:
+        raise ValueError(
+            "Could not detect a project root from the server working directory. "
+            "Call activate_project with the IDE workspace root path (absolute path to the project directory)."
+        )
+    return detected
+
+
 def _open_in_editor(path: str) -> None:
     """Open the given file in the system's default editor or viewer."""
     editor = os.environ.get("EDITOR")
@@ -125,7 +152,7 @@ class TopLevelCommands(AutoRegisteringGroup):
         "--project-from-cwd",
         is_flag=True,
         default=False,
-        help="Auto-detect project from current working directory.",
+        help="Deprecated alias: cwd auto-detection is the default when --project is omitted.",
     )
     def start_mcp_server(
         project: str | None,
@@ -153,10 +180,15 @@ class TopLevelCommands(AutoRegisteringGroup):
 
         if project_from_cwd and project is not None:
             raise click.UsageError("--project-from-cwd cannot be used with --project")
-        if project_from_cwd:
-            project = find_project_root()
-            if project is None:
-                log.warning("No project root found from %s; not activating any project", os.getcwd())
+
+        project = resolve_project_root_for_startup(project)
+        if project is None:
+            log.warning(
+                "No project root auto-detected from cwd %s; the agent should call activate_project with the workspace path",
+                os.getcwd(),
+            )
+        else:
+            log.info("Using project root %s (cwd %s)", project, os.getcwd())
 
         factory = SerenaMCPFactory(transport=transport, project=project, memory_log_handler=memory_log_handler)
         server = factory.create_mcp_server(
