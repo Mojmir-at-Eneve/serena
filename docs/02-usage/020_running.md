@@ -18,39 +18,41 @@ In general, to get help, append `--help` to the command, i.e.
 (start-mcp-server)=
 ## Running the MCP Server
 
-Given your preferred method of running Serena, you can start the MCP server using the `start-mcp-server` command:
+The main entry point is:
 
-    serena start-mcp-server [options]  
+    serena start-mcp-server [options]
 
-Note that no matter how you run the MCP server, Serena will, by default, start a web-based dashboard on localhost that will allow you to inspect
-the server's operations, logs, and configuration.
+How you use that command depends on the **transport**:
 
-:::{tip}
-By default, Serena will use language servers for code understanding and analysis.    
-With the [Serena JetBrains Plugin](025_jetbrains_plugin), we recently introduced a powerful alternative,
-which has several advantages over the language server-based approach.
-:::
+| Transport | Who starts the server | Typical use |
+|-----------|------------------------|-------------|
+| **stdio** (default) | The MCP **client** spawns `start-mcp-server` as a subprocess | Cursor, VS Code, Claude Code, most IDE integrations |
+| **streamable-http** / **sse** | **You** start the server; the client connects to a URL | Remote setups, clients that only speak HTTP, debugging |
+
+Serena does **not** start a web dashboard on launch in the current deployment. Older documentation may still describe a dashboard; that is not part of the default MCP lifecycle.
 
 ### Standard I/O Mode
 
-The typical usage involves the client (e.g. Claude Code, Codex or Cursor) running
-the MCP server as a subprocess and using the process' stdin/stdout streams to communicate with it.
-In order to launch the server, the client thus needs to be provided with the command to run the MCP server.
+In **stdio** mode, the MCP client runs `serena start-mcp-server` and communicates over the process’s standard input and output. This is the default (`--transport` omitted or `stdio`).
 
-:::{note}
-MCP servers which use stdio as a protocol are somewhat unusual as far as client/server architectures go, as the server
-necessarily has to be started by the client in order for communication to take place via the server's standard input/output streams.
-In other words, you do not need to start the server yourself. The client application (e.g. Claude Desktop) takes care of this and
-therefore needs to be configured with a launch command.
-:::
+**You usually do not start the server in a terminal.** Configure the client with the launch command (see [Configuring Your MCP Client](030_clients)). When you open a chat or enable the MCP server in the IDE, the client starts Serena, keeps one process per configured server, and stops it when the session ends.
 
-Communication over stdio is the default for the Serena MCP server, so in the simplest
-case, you can simply run the `start-mcp-server` command without any additional options.
- 
+That design is intentional: stdio MCP servers have no listening port; nothing useful is running until the client spawns the subprocess.
+
+**When manual startup still makes sense:**
+
+- **Debugging** — reproduce logs, flags, or project activation in a shell before fixing `mcp.json`.
+- **HTTP/SSE mode** — you must start the server yourself and give the client a URL (see [Streamable HTTP Mode](streamable-http) below).
+
+For a minimal local smoke test (not how IDEs run day to day):
+
     serena start-mcp-server
 
-See the section ["Configuring Your MCP Client"](030_clients) for specific information on how to configure your MCP client (e.g. Claude Code, Codex, Cursor, etc.)
-to use such a launch command.
+With a fixed project:
+
+    serena start-mcp-server --project /absolute/path/to/project
+
+See [Configuring Your MCP Client](030_clients) for client-specific `mcp.json` examples, including [Cursor](030_clients#cursor).
 
 (streamable-http)=
 ### Streamable HTTP Mode
@@ -95,10 +97,8 @@ Some useful options include:
     (looking for a directory containing `.serena/project.yml` or `.git` in parent directories and activating the containing directory as the project root, if any).
     This option is intended for CLI-based agents like Claude Code, Gemini and Codex, which are typically started from within the project directory
     and which do not change directories during their operation.
-  * `--language-backend JetBrains`: use the Serena JetBrains Plugin as the language backend (overriding the default backend configured in the central configuration)
-  * `--context <context>`: specify the operation [context](contexts) in which Serena shall operate
-  * `--mode <mode>`: specify one or more [modes](modes) to enable (can be passed several times)
-  * `--open-web-dashboard <true|false>`: whether to open the web dashboard on startup (enabled by default)
+  * `--transport <stdio|streamable-http|sse>`: communication protocol (stdio is the default for IDE clients).
+  * `--log-level`, `--trace-lsp-communication`, `--tool-timeout`: override values from [configuration](050_configuration).
 
 ## Other Commands
 

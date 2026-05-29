@@ -26,16 +26,14 @@ while others have a global MCP configuration (e.g. Codex and Claude Desktop).
 
 - In the per-workspace case, you typically want to start Serena with your workspace directory as the project directory 
   and never switch to a different project. This is achieved by specifying the
-  `--project <path>` argument with a single-project [context](#contexts) (e.g. `ide` or `claude-code`).
+  `--project <path>` argument (absolute path to the workspace).
 - In the global configuration case, you must first activate the project you want to work on, which you can do by asking
   the LLM to do so (e.g., "Activate the current dir as project using serena"). In such settings, the `activate_project`
   tool is required.
 
 **Tool Selection**.
 While you may be able to turn off tools through your client's interface (e.g., in VSCode or Claude Desktop),
-we recommend selecting your base tool set through Serena's configuration, as Serena's prompts automatically
-adjust based on which tools are enabled/disabled.  
-A key mechanism for this is to use the appropriate [context](#contexts) when starting Serena.
+we recommend selecting your base tool set through Serena's [configuration](050_configuration) (`excluded_tools`, `included_optional_tools`, and related settings).
 
 (clients-common-pitfalls)=
 ### Common Pitfalls
@@ -63,6 +61,108 @@ object, e.g.
     "DOTNET_ROOT": "/opt/homebrew/Cellar/dotnet/9.0.8/libexec"
 }
 ```
+
+(cursor)=
+## Cursor
+
+Cursor starts MCP servers for you. For normal use with stdio, **do not** run `serena start-mcp-server` in a terminal alongside the IDE. That duplicates what Cursor already does from `mcp.json` and is a common reason people think Serena “works in the terminal but not in Cursor.”
+
+### Add the server
+
+1. Open **Cursor Settings** → **MCP** (or edit `mcp.json` directly).
+2. Add a **stdio** server entry that runs `serena start-mcp-server` with your project (see examples below).
+3. Reload MCP or restart the agent session if tools do not appear.
+
+You can put configuration in:
+
+- **User (global)** — applies everywhere; use `--project` with an absolute path, or accept that `--project-from-cwd` depends on how Cursor sets the subprocess working directory.
+- **Workspace** — `.cursor/mcp.json` in the repo; good for team defaults and for contributors cloning Serena itself.
+
+### `mcp.json` examples
+
+**Install via `uvx` (no local clone):**
+
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/oraios/serena",
+        "serena", "start-mcp-server",
+        "--project", "/absolute/path/to/your/project"
+      ]
+    }
+  }
+}
+```
+
+**`serena` on your PATH** (after [installation](010_installation)):
+
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "serena",
+      "args": [
+        "start-mcp-server",
+        "--project", "/absolute/path/to/your/project"
+      ]
+    }
+  }
+}
+```
+
+**Develop from a cloned Serena repo:**
+
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory", "/absolute/path/to/serena",
+        "serena", "start-mcp-server",
+        "--project", "/absolute/path/to/your/workspace"
+      ]
+    }
+  }
+}
+```
+
+### Choosing `--project` vs `--project-from-cwd`
+
+| Flag | Behavior | When to use |
+|------|----------|-------------|
+| `--project <path>` | Always uses that directory as the Serena project root | Workspace-specific `mcp.json`, or a global config aimed at one repo |
+| `--project-from-cwd` | Detects project from the server process’s current directory (`.serena/project.yml` or `.git` in cwd or parents) | Client always launches the server with cwd set to the workspace root |
+
+Prefer **`--project` with an absolute path** when you want predictable behavior regardless of how Cursor spawns the subprocess. Use **`--project-from-cwd`** when you maintain one MCP template and open different folders, and you have verified Cursor sets cwd to the workspace root.
+
+### One-time setup (not MCP lifecycle)
+
+Before first use in a repo, run once on your machine:
+
+```bash
+serena init
+cd /path/to/your/project
+serena project create
+serena project index   # optional, recommended
+```
+
+Cursor does not run these for you.
+
+### Pitfall: terminal `start-mcp-server`
+
+If Serena works in the terminal but not in Cursor, the fix is almost always the **MCP config**, not an extra manual server. For HTTP/SSE instead of stdio, you **do** start the server yourself — see [Running the MCP Server](020_running#streamable-http).
+
+### Further reading
+
+- [MCP server command-line arguments](mcp-args) — `--project`, `--project-from-cwd`, transport options
+- [Configuration](050_configuration) — tools, projects, and optional `included_optional_tools`
+
+There is no `serena setup cursor` command; configure Cursor with the JSON examples above.
 
 ## Copilot in JetBrains
 
@@ -539,19 +639,18 @@ There are many terminal-based coding assistants that support MCP servers, such a
  * [OpenHands CLI](https://docs.all-hands.dev/usage/how-to/cli-mode) and
  * [opencode](https://github.com/sst/opencode).
 
-They generally benefit from the symbolic tools provided by Serena. You might want to customize some aspects of Serena
-by writing your own context, modes or prompts to adjust it to the client's respective internal capabilities (and your general workflow).
-
-In most cases, the `ide` context is likely to be appropriate for such clients, i.e. add the arguments `--context ide` 
-in order to reduce tool duplication.
+They generally benefit from the symbolic tools provided by Serena. If the host’s built-in tools overlap with Serena’s,
+tune the tool set via [configuration](050_configuration) rather than running a second server process.
 
 ### MCP-Enabled IDEs and Coding Clients (Cline, Roo-Code, Cursor, Windsurf, etc.)
 
-Most of the popular existing coding assistants (e.g. IDE extensions) and AI-enabled IDEs themselves support connections
-to MCP Servers. Serena generally boosts performance by providing efficient tools for symbolic operations.
+Many coding assistants and AI-enabled IDEs can attach to MCP servers over stdio. Serena adds language-server-backed symbolic tools on top of whatever the host already provides.
 
-We generally recommend using the `ide` context for these integrations by adding the arguments `--context ide` 
-in order to reduce tool duplication.
+**Cursor** has a dedicated walkthrough with full `mcp.json` examples, global vs workspace config, and the common “don’t start the server in a terminal” mistake — see [Cursor](#cursor) above.
+
+For other hosts in this category (Cline, Roo Code, Windsurf, etc.), follow the [general instructions](#clients-general-instructions): add a stdio launch command, point it at your project, and let the **client** spawn Serena. Only use a manually started server when you deliberately run [HTTP/SSE mode](020_running#streamable-http).
+
+If the host’s built-in tools overlap with Serena’s, adjust [configuration](050_configuration) (for example `excluded_tools` or `included_optional_tools`) rather than running a second server process.
 
 ### Local GUIs and Agent Frameworks
 
