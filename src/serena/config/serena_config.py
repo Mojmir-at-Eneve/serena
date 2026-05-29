@@ -35,7 +35,6 @@ from serena.util.inspection import determine_programming_language_composition
 from serena.util.yaml import YamlCommentNormalisation, load_yaml, normalise_yaml_comments, save_yaml, transfer_yaml_comments
 from solidlsp.ls_config import Language
 
-from ..analytics import RegisteredTokenCountEstimator
 from ..util.class_decorators import singleton
 from ..util.cli_util import ask_yes_no
 from ..util.dataclass import get_dataclass_default
@@ -71,23 +70,6 @@ class SerenaPaths:
         the path to the Serena home directory, where the user's configuration/data is stored.
         This is ~/.serena by default, but it can be overridden via the SERENA_HOME environment variable.
         """
-        self.user_prompt_templates_dir: str = os.path.join(self.serena_user_home_dir, "prompt_templates")
-        """
-        directory containing prompt templates defined by the user.
-        Prompts defined by the user take precedence over Serena's built-in prompt templates.
-        """
-        self.user_contexts_dir: str = os.path.join(self.serena_user_home_dir, "contexts")
-        """
-        directory containing contexts defined by the user. 
-        If a name of a context matches a name of a context in SERENAS_OWN_CONTEXT_YAMLS_DIR, 
-        the user context will override the default context definition.
-        """
-        self.user_modes_dir: str = os.path.join(self.serena_user_home_dir, "modes")
-        """
-        directory containing modes defined by the user.
-        If a name of a mode matches a name of a mode in SERENAS_OWN_MODES_YAML_DIR,
-        the user mode will override the default mode definition.
-        """
         self.news_legacy_last_read_id_file: str = os.path.join(self.serena_user_home_dir, "last_read_news_snippet_id.txt")
         """
         file containing the ID of the last read news snippet
@@ -107,12 +89,6 @@ class SerenaPaths:
         self.news_dir: str = os.path.join(REPO_ROOT, "news")
         """
         repository news directory containing the source HTML snippets and generated news.json
-        """
-        global_memories_path = Path(os.path.join(self.serena_user_home_dir, "memories", "global"))
-        global_memories_path.mkdir(parents=True, exist_ok=True)
-        self.global_memories_path = global_memories_path
-        """
-        directory where global memories are stored, i.e. memories that are available across all projects
         """
         self.last_returned_log_file_path: str | None = None
         """
@@ -174,48 +150,19 @@ class NamedToolInclusionDefinition(ToolInclusionDefinition):
         return f"ToolInclusionDefinition[{self.name}]"
 
 
-@dataclass
-class ModeSelectionDefinition:
-    default_modes: Sequence[str] | None = None
-
-
-@dataclass
-class ModeSelectionDefinitionWithBaseModes(ModeSelectionDefinition):
-    base_modes: Sequence[str] | None = ("interactive", "editing")
-    """
-    the base modes to use, which are always guaranteed to be included
-    """
-
-
-@dataclass
-class ModeSelectionDefinitionWithAddedModes(ModeSelectionDefinition):
-    added_modes: Sequence[str] | None = None
-
-
 class LanguageBackend(Enum):
+    """LSP-only backend: SolidLSP language servers."""
+
     LSP = "LSP"
-    """
-    Use the language server protocol (LSP), spawning freely available language servers
-    via the SolidLSP library that is part of Serena
-    """
-    JETBRAINS = "JetBrains"
-    """
-    Use the Serena plugin in your JetBrains IDE.
-    (requires the plugin to be installed and the project being worked on to be open in your IDE)
-    """
 
     @staticmethod
     def from_str(backend_str: str) -> "LanguageBackend":
-        for backend in LanguageBackend:
-            if backend.value.lower() == backend_str.lower():
-                return backend
-        raise ValueError(f"Unknown language backend '{backend_str}': valid values are {[b.value for b in LanguageBackend]}")
+        if backend_str.lower() == LanguageBackend.LSP.value.lower():
+            return LanguageBackend.LSP
+        raise ValueError(f"Unknown language backend '{backend_str}': only LSP is supported")
 
     def is_lsp(self) -> bool:
-        return self == LanguageBackend.LSP
-
-    def is_jetbrains(self) -> bool:
-        return self == LanguageBackend.JETBRAINS
+        return True
 
 
 class LineEnding(Enum):
@@ -257,8 +204,6 @@ class SharedConfig(ToolInclusionDefinition, ToStringMixin):
     symbol_info_budget: float | None = None
     language_backend: LanguageBackend | None = None
     line_ending: LineEnding | None = None
-    read_only_memory_patterns: list[str] = field(default_factory=list)
-    ignored_memory_patterns: list[str] = field(default_factory=list)
     ls_specific_settings: dict = field(default_factory=dict)
     """Advanced configuration option allowing to configure language server implementation specific options, see SolidLSPSettings for more info."""
 
@@ -275,7 +220,7 @@ Uses $projectDir and $projectFolderName as placeholders.
 
 
 @dataclass(kw_only=True)
-class ProjectConfig(SharedConfig, ModeSelectionDefinitionWithAddedModes):
+class ProjectConfig(SharedConfig):
     project_name: str
     languages: list[Language]
     ignored_paths: list[str] = field(default_factory=list)
@@ -493,9 +438,6 @@ class ProjectConfig(SharedConfig, ModeSelectionDefinitionWithAddedModes):
         included_optional_tools = data["included_optional_tools"] or []
         additional_workspace_folders = data.get("additional_workspace_folders") or []
 
-        if "base_modes" in data and data["base_modes"] is not None:
-            log.warning("The base_modes setting in project.yml is deprecated and will be ignored.")
-
         return cls(
             project_name=data["project_name"],
             languages=languages,
@@ -505,15 +447,11 @@ class ProjectConfig(SharedConfig, ModeSelectionDefinitionWithAddedModes):
             fixed_tools=fixed_tools,
             included_optional_tools=included_optional_tools,
             read_only=data["read_only"],
-            read_only_memory_patterns=data.get("read_only_memory_patterns", []),
-            ignored_memory_patterns=data.get("ignored_memory_patterns", []),
             ignore_all_files_in_gitignore=data["ignore_all_files_in_gitignore"],
             initial_prompt=data["initial_prompt"],
             encoding=data["encoding"],
             line_ending=line_ending,
             language_backend=language_backend,
-            added_modes=data["added_modes"],
-            default_modes=data["default_modes"],
             symbol_info_budget=symbol_info_budget,
             ls_specific_settings=data.get("ls_specific_settings", {}),
             _local_override_keys=local_override_keys,
@@ -703,7 +641,7 @@ class RegisteredProject(ToStringMixin):
 
 
 @dataclass(kw_only=True)
-class SerenaConfig(SharedConfig, ModeSelectionDefinitionWithBaseModes):
+class SerenaConfig(SharedConfig):
     """
     Holds the Serena agent configuration, which is typically loaded from a YAML configuration file
     (when instantiated via :method:`from_config_file`), which is updated when projects are added or removed.
@@ -717,14 +655,7 @@ class SerenaConfig(SharedConfig, ModeSelectionDefinitionWithBaseModes):
     projects: list[RegisteredProject] = field(default_factory=list)
     log_level: int = logging.INFO
     trace_lsp_communication: bool = False
-    jetbrains_plugin_server_address: str = "127.0.0.1"
     tool_timeout: float = DEFAULT_TOOL_TIMEOUT
-
-    token_count_estimator: str = RegisteredTokenCountEstimator.CHAR_COUNT.name
-    """Name of the token count estimator (see `RegisteredTokenCountEstimator`). Reserved for future use.
-
-    Note: tiktoken may download data files on first run; CHAR_COUNT requires no network access.
-    """
     default_max_tool_answer_chars: int = 150_000
     """Used as default for tools where the apply method has a default maximal answer length.
     Even though the value of the max_answer_chars can be changed when calling the tool, it may make sense to adjust this default 
@@ -911,13 +842,6 @@ class SerenaConfig(SharedConfig, ModeSelectionDefinitionWithBaseModes):
         if "language_backend" in loaded_commented_yaml:
             backend_str = loaded_commented_yaml["language_backend"]
             language_backend = LanguageBackend.from_str(backend_str)
-        else:
-            # backward compatibility (migrate Boolean field "jetbrains")
-            if "jetbrains" in loaded_commented_yaml:
-                num_migrations += 1
-                if loaded_commented_yaml["jetbrains"]:
-                    language_backend = LanguageBackend.JETBRAINS
-                del loaded_commented_yaml["jetbrains"]
         instance.language_backend = language_backend
 
         # determine line ending
@@ -934,14 +858,6 @@ class SerenaConfig(SharedConfig, ModeSelectionDefinitionWithBaseModes):
             if "log_level" not in loaded_commented_yaml:
                 instance.log_level = loaded_commented_yaml["gui_log_level"]
             del loaded_commented_yaml["gui_log_level"]
-
-        # migrate "edit_global_memories"
-        if "edit_global_memories" in loaded_commented_yaml:
-            num_migrations += 1
-            edit_global_memories = loaded_commented_yaml["edit_global_memories"]
-            if not edit_global_memories:
-                instance.read_only_memory_patterns.append("global/.*")
-            del loaded_commented_yaml["edit_global_memories"]
 
         # re-save the configuration file if any migrations were performed
         if num_migrations > 0:
@@ -1181,9 +1097,5 @@ class SerenaConfig(SharedConfig, ModeSelectionDefinitionWithBaseModes):
         return os.path.join(serena_folder, ProjectConfig.SERENA_PROJECT_FILE)
 
     def propagate_settings(self) -> None:
-        """
-        Propagate settings from this configuration to individual components that are statically configured
-        """
-        from serena.tools import JetBrainsPluginClient
-
-        JetBrainsPluginClient.set_server_address(self.jetbrains_plugin_server_address)
+        """Propagate settings from this configuration to individual components that are statically configured."""
+        pass

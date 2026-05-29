@@ -5,7 +5,7 @@ requires = ["hatchling"]
 [project]
 name = "serena-agent"
 version = "1.5.4.dev0"
-description = "A powerful MCP toolkit for coding, providing semantic retrieval and editing capabilities - the IDE for your agent"
+description = "LSP-backed MCP toolbox for coding agents: semantic code intelligence and editing across many languages"
 authors = [{ name = "Oraios AI", email = "info@oraios-ai.de" }]
 readme = "README.md"
 requires-python = ">=3.11, <3.15"
@@ -16,14 +16,12 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-# Removed for internal MCP use: anthropic (remote token API), pywebview/pystray (dashboard UI), agno extra.
-# Kept: flask/werkzeug (project_server), requests (SolidLSP LS downloads), tiktoken (optional local tokenizer).
+# Ground-truth MCP: LSP toolbox only (no dashboard, memories, JetBrains, or prompt machinery).
 dependencies = [
   "requests==2.33.0",
   "overrides==7.7.0",
   "python-dotenv==1.2.2",
   "mcp==1.27.0",
-  "flask==3.1.3", # project server; bumped from 3.1.1 for CVE fix (also fixes werkzeug alert)
   "sensai-utils==1.5.0",
   "pydantic==2.12.5",
   "types-pyyaml==6.0.12.20250516",
@@ -36,14 +34,12 @@ dependencies = [
   "docstring_parser==0.17.0",
   "joblib==1.5.1",
   "tqdm==4.67.1",
-  "tiktoken==0.12.0",
   "beautifulsoup4==4.14.2",
   "pygls==2.1.1", # used to implement an msl language server
   "lsprotocol==2025.0.0",
   # Transitive deps pinned for security (dependabot alerts).
   # Exact pins because uvx installs from git, ignoring the lock file.
   "urllib3==2.7.0",
-  "werkzeug==3.1.7",
   "starlette==1.0.0",
   "python-multipart==0.0.27",
   "filelock==3.25.2",
@@ -62,8 +58,6 @@ explicit = true
 [project.scripts]
 serena = "serena.cli:top_level"
 serena-agent = "serena.cli:top_level"
-serena-hooks = "serena.hooks:hook_commands"
-
 [project.license]
 text = "MIT"
 
@@ -101,7 +95,7 @@ google = ["google-genai==1.27.0"]
 Homepage = "https://github.com/oraios/serena"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/serena", "src/interprompt", "src/solidlsp"]
+packages = ["src/serena", "src/solidlsp"]
 
 [tool.doc8]
 max-line-length = 1000

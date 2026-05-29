@@ -13,7 +13,6 @@ from serena.config.serena_config import (
     SerenaConfig,
 )
 from serena.ls_manager import LanguageServerFactory, LanguageServerManager
-from serena.memories.memory_manager import MemoryManager
 from serena.util.file_system import GitignoreParser, match_path
 from serena.util.text_utils import MatchedConsecutiveLines, search_files
 from solidlsp import SolidLanguageServer
@@ -41,14 +40,6 @@ class Project(ToStringMixin):
         self.serena_config = serena_config
         self._serena_data_folder = serena_config.get_project_serena_folder(self.project_root)
         log.info("Serena project data folder: %s", self._serena_data_folder)
-
-        read_only_memory_patterns = serena_config.read_only_memory_patterns + project_config.read_only_memory_patterns
-        ignored_memory_patterns = serena_config.ignored_memory_patterns + project_config.ignored_memory_patterns
-        self.memory_manager = MemoryManager(
-            self._serena_data_folder,
-            read_only_memory_patterns=read_only_memory_patterns,
-            ignored_memory_patterns=ignored_memory_patterns,
-        )
 
         # resolve line ending (project -> global)
         self.line_ending = project_config.line_ending or serena_config.line_ending

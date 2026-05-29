@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+---
+
+Make sure to test/make tests for the changes (each logical part) and, when implementing, make a GIT commit with the message title stating "what" was done, and a short message body specifying "why" it was done (separate for each logical part).
+Additionally, specify our decisions in code changes as well briefly using comment blocks where relevant.

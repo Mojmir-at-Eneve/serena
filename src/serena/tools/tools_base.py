@@ -13,10 +13,7 @@ from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata, func_metada
 from sensai.util import logging
 from sensai.util.string import dict_string
 
-from serena.config.serena_config import LanguageBackend
-from serena.memories.memory_manager import MemoryManager
 from serena.project import Project
-from serena.prompt_factory import PromptFactory
 from serena.util.class_decorators import singleton
 from serena.util.inspection import iter_subclasses
 from serena.util.ls_diagnostics import DiagnosticsDiff, EditedFilePath, PublishedDiagnosticsSnapshot
@@ -42,18 +39,9 @@ class Component(ABC):
         """
         return self.project.project_root
 
-    @property
-    def prompt_factory(self) -> PromptFactory:
-        return self.agent.prompt_factory
-
-    @property
-    def memory_manager(self) -> "MemoryManager":
-        return self.project.memory_manager
-
     def create_language_server_symbol_retriever(self) -> "LanguageServerSymbolRetriever":
         from serena.symbol import LanguageServerSymbolRetriever
 
-        assert self.agent.get_language_backend().is_lsp(), "Language server symbol retriever can only be created for LSP language backend"
         return LanguageServerSymbolRetriever(self.project)
 
     @property
@@ -61,15 +49,7 @@ class Component(ABC):
         return self.agent.get_active_project_or_raise()
 
     def create_code_editor(self) -> "CodeEditor":
-        from ..code_editor import JetBrainsCodeEditor
-
-        match self.agent.get_language_backend():
-            case LanguageBackend.LSP:
-                return self.create_ls_code_editor()
-            case LanguageBackend.JETBRAINS:
-                return JetBrainsCodeEditor(project=self.project)
-            case _:
-                raise ValueError
+        return self.create_ls_code_editor()
 
     def create_ls_code_editor(self) -> "LanguageServerCodeEditor":
         from ..code_editor import LanguageServerCodeEditor

@@ -4,7 +4,6 @@ import pytest
 from mcp.server.fastmcp.tools.base import Tool as MCPTool
 
 from serena.agent import Tool, ToolRegistry
-from serena.config.context_mode import SerenaAgentContext
 from serena.mcp import SerenaMCPFactory
 
 make_tool = SerenaMCPFactory.make_mcp_tool
@@ -15,10 +14,6 @@ class MockAgent:
     def __init__(self):
         self.project_config = None
         self.serena_config = None
-
-    @staticmethod
-    def get_context() -> SerenaAgentContext:
-        return SerenaAgentContext.load_default()
 
 
 class BaseMockTool(Tool):

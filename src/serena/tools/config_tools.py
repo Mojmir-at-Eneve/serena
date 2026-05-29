@@ -20,8 +20,8 @@ class ActivateProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
         """
         is_new_activation = self.agent.activate_project_from_path_or_name(project)
         mark_used(is_new_activation)
-        result = self.agent.get_project_activation_message(session_id)
-        result += "\nIMPORTANT: If you have not yet read the 'Serena Instructions Manual', do it now before continuing!"
+        result = self.agent.get_project_activation_message()
+        result += "\nCall `initial_instructions` if you have not yet read the Serena toolbox manual."
         return result
 
 
@@ -42,11 +42,11 @@ class RemoveProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject, ToolMarkerO
 
 class GetCurrentConfigTool(Tool):
     """
-    Prints the current configuration of the agent, including the active and available projects, tools, contexts, and modes.
+    Prints the current configuration of the agent, including the active and available projects and tools.
     """
 
     def apply(self) -> str:
         """
-        Print the current configuration of the agent, including the active and available projects, tools, contexts, and modes.
+        Print the current configuration of the agent, including the active and available projects and tools.
         """
         return self.agent.get_current_config_overview()
