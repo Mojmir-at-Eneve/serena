@@ -9,8 +9,7 @@ setting up a project with Serena typically involves the following steps:
 
 1. **Project creation**: Configuring project settings for Serena (and indexing the project, if desired)
 2. **Project activation**: Making Serena aware of the project you want to work with
-3. **Onboarding**: Getting Serena familiar with the project (creating memories)
-4. **Working on coding tasks**: Using Serena to help you with actual coding tasks in the project
+3. **Working on coding tasks**: Using Serena to help you with actual coding tasks in the project
 
 (project-creation-indexing)=
 ## Project Creation & Indexing
@@ -45,15 +44,13 @@ within the project directory.
 
 The file allows you to configure ...
   * the name by which you want to refer to the project (relevant when telling the LLM to dynamically activate the project)
-  * the set of programming languages for which language servers are spawned (not relevant when using the JetBrains plugin)
-    Note that you can dynamically add/remove language servers while Serena is running via the [Dashboard](060_dashboard).
-  * the [language backend](per-project-language-backend) to use for this project (overriding the global setting)
+  * the set of programming languages for which language servers are spawned
   * the encoding used in source files
   * ignore rules
   * write access
   * [additional workspace folders](additional-workspace-folders) for cross-package reference support in monorepos
-  * an initial prompt that shall be passed to the LLM whenever the project is activated
-  * the set of tools and modes to use for the project
+  * an `initial_prompt` passed to the agent when the project is activated
+  * tool inclusion/exclusion for this project
   * and some other settings.
 
 For detailed information on the parameters and possible settings, see the 
@@ -99,11 +96,7 @@ cross-references for.
 (indexing)=
 ### Indexing
 
-:::{note}
-Indexing is not a relevant operation when using the JetBrains plugin, as indexing is handled by the IDE.
-:::
-
-Especially for larger project, it can be advisable to index the project after creation, pre-caching 
+Especially for larger projects, it can be advisable to index the project after creation, pre-caching 
 symbol information provided by the language server(s). This will avoid delays during the first tool invocation
 that requires symbol information.
 
@@ -123,38 +116,9 @@ You can either choose to do this
       * "Activate the project /path/to/my_project" (for first-time activation with auto-creation)
       * "Activate the project my_project"
    
-   Note that this option requires the `activate_project` tool to be active, 
-   which it isn't in single-project [contexts](contexts) like `ide` or `claude-code` *if* a project is provided at startup.
-   (The tool is deactivated, because we assume that in these contexts, user will only work on the single, open project and have
-   no need to switch it.)
+   This requires the `activate_project` tool (enabled by default unless a project is fixed at startup).
 
- * when the MCP server starts, by passing the project path or name as a command-line argument
-   (e.g. when using a single-project mode like `ide` or `claude-code`): `--project <path|name>`
-
-When working with the JetBrains plugin, be sure to have the same project folder open as a project in your IDE,
-i.e. the folder that is activated in Serena should correspond to the root folder of the project in your IDE.
-
-## Onboarding & Memories
-
-By default, Serena will perform an **onboarding process** when
-it is started for the first time for a project.
-The goal of the onboarding is for Serena to get familiar with the project
-and to store memories, which it can then draw upon in future interactions.
-
-In general, **memories** provide a way for Serena to store and retrieve 
-information about the project, relevant conventions, and other relevant aspects.
-Memories may reference each other using the `` `mem:NAME` `` convention; references
-are kept in sync across renames, and a `serena memories check` command is available
-to report stale references.
-
-During the first onboarding, Serena seeds a `memory_maintenance` memory describing the
-conventions (style, references) that subsequent memories should follow, and the
-agent is instructed to read it before writing any project-specific memories.
-
-For more information on this, including the target memory layout, the `mem:` reference
-convention, the `serena memories` CLI subcommands, and how to manage or disable these
-features, see [Memories & Onboarding](045_memories).
-
+ * when the MCP server starts, by passing the project path or name: `--project <path|name>` or `--project-from-cwd`
 
 ## Preparing Your Project
 
@@ -210,30 +174,7 @@ If fulfilling a task requires a single agent to edit code in multiple projects, 
 i.e. a folder that contains all the projects as sub-folders, and open that monorepo folder as a project in Serena.
 You may also use symbolic links to create a monorepo folder if the projects are located in different places on your filesystem.
 
-If several languages are used across the projects, specify all of them as needed when using the LSP backend;
-For JetBrains mode, make sure that your IDE is configured to work with all the languages used across the projects (e.g. by installing the respective language plugins).
-
-(query-projects)=
-### Reading from External Projects
-
-If, while working on a project, you want Serena to be able to read code or other information from another project (e.g. a library or otherwise related project), 
-this can be enabled via the `query_project` tool.
-Provided that the project you want to query is known to Serena (i.e. you have created it as described above),
-the `query_project` tool allows the agent to query files and symbolic information from that project.
-
-To enable this tool, [activate the mode](modes) `query-projects`.
-This also enables a second tool for listing projects that can be queried.
-
-Depending on the language backend being used, the management of resources for the external projects varies:
-
-* When using the JetBrains backend, make sure that every project for which you want symbolic queries to work is open in an IDE instance. 
-* When using the LSP backend, executing symbolic tools via the query tool requires that Serena's **Project Server** be started,
-  which will automatically spawn the necessary language servers for the projects that are queried.
-
-  To start the server, run
-
-      serena start-project-server
-
+If several languages are used across the projects, list all of them in `project.yml`.
 
 ### Multiple Agents Accessing a Single Serena Instance
 

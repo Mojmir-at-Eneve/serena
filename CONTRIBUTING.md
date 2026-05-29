@@ -16,7 +16,7 @@ Every PR should cover a single logical change or a set of closely related change
 
 ### Adding Support for a New Language Server
 
-See the corresponding [memory](.serena/memories/adding_new_language_support_guide.md).
+See [Language Support](docs/01-about/020_programming-languages.md) and the SolidLSP language-server adapters under `src/solidlsp/`.
 
 ## Python Environment Setup
 

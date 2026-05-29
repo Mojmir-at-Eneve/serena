@@ -6,9 +6,7 @@ We performed evaluations using popular AI coding agents in representative scenar
 agents, different programming languages, and different codebases — to show that the results are
 not specific to a single setup.
 
-All evaluations were conducted using the **JetBrains-powered version** of Serena, as it is the
-more powerful backend with a broader set of refactoring and navigation capabilities. The
-evaluation can easily be repeated with the LSP-based backend to assess its subset of capabilities.
+Most published runs used a **JetBrains IDE plugin** backend that is no longer shipped; findings about symbolic tools vs. built-ins still apply to the current **LSP-only** Serena. Re-run the [evaluation prompt](../020_prompts/010_evaluation-prompt.md) on your stack to compare.
 
 - [Claude Code (Opus 4.6) on a large Python codebase](010_cc_on_tianshou)
 - [Codex (GPT 5.4) on a Java codebase](020_codex_on_jbplugin)

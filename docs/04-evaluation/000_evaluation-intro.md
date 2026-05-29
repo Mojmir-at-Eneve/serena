@@ -34,14 +34,8 @@ metrics. And because the prompt defines task *categories* rather than fixed task
 can rerun the evaluation on their own project with their own agent.
 
 
-## Serena in JetBrains Junie
+## Historical: JetBrains-backed evaluations
 
-A particularly notable evaluation scenario is Serena in JetBrains' Junie plugin. The latter also has access 
-to some of JetBrains' refactoring tools. At the time of writing, the only overlapping capability between Serena's tool
-and Junie's native tools is the renaming feature. Opus correctly noticed this during the evaluation and marked the
-renaming capability as equivalent. However, many symbolic and refactoring tools offered by Serena have no inbuilt equivalents,
-leading to the following summary result for Junie:
+Some result pages (including Junie and early Codex runs) used a **JetBrains IDE plugin** backend that is no longer part of Serena. The methodology and qualitative findings about symbolic tools vs. built-ins still apply; the JetBrains-specific setup does not reflect the current LSP-only deployment.
 
-> **Junie Plugin (Opus 4.6)**: Serena gives me what my built-in tools can't — the ability to move a function between modules with all imports updated atomically, trace a class hierarchy into dependencies, and safely delete symbols with usage guards — and I'd ask my owner to add it for the move-refactoring and semantic navigation capabilities alone.
-
-See the full evaluation [here](030_results/050_junie_plugin_on_tianshou.md).
+See [Junie plugin evaluation](030_results/050_junie_plugin_on_tianshou.md) for the archived Junie scenario.

@@ -1,7 +1,7 @@
 # C/C++ Setup Guide
 
 This guide explains how to prepare a C/C++ project so that Serena can provide reliable code intelligence via clangd or ccls language servers.
-This is only necessary if you use the language server variant of Serena, for users of the Serena JetBrains plugin no setup is required
+Serena uses language servers for C/C++; the steps below apply when C++ is listed in your project's `languages`.
 and the limitations described below do not apply.
 
 ---

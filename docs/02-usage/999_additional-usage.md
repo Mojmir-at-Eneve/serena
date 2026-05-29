@@ -6,16 +6,14 @@ We found that it is often a good idea to spend some time conceptualizing and pla
 before actually implementing it, especially for non-trivial task. This helps both in achieving
 better results and in increasing the feeling of control and staying in the loop. You can
 make a detailed plan in one session, where Serena may read a lot of your code to build up the context,
-and then continue with the implementation in another (potentially after creating suitable memories).
+and then continue with the implementation in another session.
 
 ## Running Out of Context
 
 For long and complicated tasks, or tasks where Serena has read a lot of content, you
 may come close to the limits of context tokens. In that case, it is often a good idea to continue
-in a new conversation. Serena has a dedicated tool to create a summary of the current state
-of the progress and all relevant info for continuing it. You can request to create this summary and
-write it to a memory. Then, in a new conversation, you can just ask Serena to read the memory and
-continue with the task. In our experience, this worked really well. On the up-side, since in a
+in a new conversation. In a new conversation, ask the agent to read `initial_instructions` again and summarize where you left off
+(e.g. from your issue tracker or a short note in the repo). On the up-side, since in a
 single session there is no summarization involved, Serena does not usually get lost (unlike some
 other agents that summarize under the hood), and it is also instructed to occasionally check whether
 it's on the right track.

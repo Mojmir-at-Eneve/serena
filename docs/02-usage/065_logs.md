@@ -1,14 +1,10 @@
 # Logs
 
-It can be vital to understand what is happening in Serena, especially when something goes wrong. 
+To see what Serena is doing (especially when something fails):
 
-You can access Serena's live logs via 
-  * the [Serena dashboard](060_dashboard) (tab "Logs")
-  * the [GUI tool](060_dashboard).
+- **Live stderr** from the MCP subprocess (your client's MCP log view, if available).
+- **Persisted files** under:
+  - `~/.serena/logs` on Linux and macOS
+  - `%USERPROFILE%\.serena\logs` on Windows
 
-Additionally, logs are persisted in the Serena home directory, which, by default, is located at
-  * `%USERPROFILE%\.serena\logs` on Windows
-  * `~/.serena/logs` on Linux and macOS.
-
-You can adjust the log level via the [global configuration](global-config).
-You additionally have the option of enabling full tracing of language server communication (mostly for development purposes).
+Adjust verbosity via `log_level` in [global configuration](050_configuration). Enable `trace_lsp_communication` to log raw language-server protocol messages (mainly for development).

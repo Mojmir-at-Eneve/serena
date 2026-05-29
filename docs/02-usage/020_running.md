@@ -142,35 +142,8 @@ serena project health-check
 # check if a path is ignored by the project
 serena project is_ignored_path path/to/check
 
-# edit Serena's configuration file
+# edit Serena's global configuration file
 serena config edit
-
-# list available contexts
-serena context list
-
-# create a new context
-serena context create my-custom-context
-
-# edit a custom context
-serena context edit my-custom-context
-
-# list available modes
-serena mode list
-
-# create a new mode
-serena mode create my-custom-mode
-
-# edit a custom mode
-serena mode edit my-custom-mode
-
-# list available prompt definitions
-serena prompts list
-
-# create an override for internal prompts
-serena prompts create-override prompt-name
-
-# edit a prompt override
-serena prompts edit-override prompt-name
 ```
 
 Explore the full set of commands and options using the CLI itself!
@@ -180,7 +153,7 @@ Explore the full set of commands and options using the CLI itself!
 
 Depending on your requirements, you may want to run Serena in different ways.
 When applying one of these approaches, replace `serena` in commands mentioned throughout the documentation
-with the respective command and options. The same applies to `serena-hooks` commands.
+with the respective command and options.
 
 ### Using uvx to Run the Latest Source Version
     

@@ -24,14 +24,9 @@ With `uv` installed and on your PATH, install Serena with this command:
 
 Upon completion, the command `serena` should be available in your terminal.
 
-To test the installation and initialise Serena, run one of the following commands:
+To test the installation and create the global config file, run:
 
-  * `serena init`  
-    if you intend to use the default language intelligence backend (language servers)
-  * `serena init -b JetBrains`  
-    if you intend to use the JetBrains backend (which uses the [JetBrains plugin](025_jetbrains_plugin))
-
-Note that you can switch backends at any time via Serena's [configuration](050_configuration). 
+    serena init
 
 ## Updating Serena
 
@@ -40,8 +35,7 @@ To update Serena to the latest version, run:
     uv tool upgrade serena-agent
 
 :::{tip}
-To keep informed about updates, make sure you regularly open [Serena's Dashboard](060_dashboard),
-where we will announce releases along with the new features and improvements they bring.
+Watch the [GitHub repository](https://github.com/oraios/serena) for releases and changelog updates.
 :::
 
 ## Uninstalling Serena

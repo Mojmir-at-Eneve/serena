@@ -37,13 +37,9 @@ While setting up a sandboxed environment may require some initial effort, we hig
 (network-security)=
 ## Network Security
 
-Serena includes several network services:
-- the Serena MCP server itself (when run in [HTTP or SSE mode](streamable-http) instead of stdio mode)
-- the Serena Dashboard web server
-- the Serena JetBrains Plugin server, which runs within the JetBrains IDE (when using the JetBrains language backend)
-- the Serena Project Server (only started explicitly for [project querying](query-projects)) 
+When run in [HTTP or SSE mode](streamable-http) instead of stdio, the Serena MCP server listens on a local port.
 
-By default, these services accept connections from localhost only, which is a secure default for most users
+By default, it accepts connections from localhost only, which is a secure default for most users
 (given our assumption that the local machine is trusted; see above).
 
 These services can be reconfigured to listen on other addresses, but doing so may have security implications.
@@ -52,14 +48,7 @@ If you need to allow connections from other machines, we recommend that you set 
 
 ## Supply Chain Security
 
-Serena has two language backends with different security characteristics:
-
-- the JetBrains-based variant, which integrates with a running JetBrains IDE, and
-- the language-server-based variant (the free variant), which can automatically acquire language server dependencies on demand.
-
-While we can assume that JetBrains IDEs installed by the user do not pose a security risk,
-language server dependencies (if not handled with care) could. 
-For convenience, Serena downloads or installs certain language server dependencies on demand.
+Serena uses language servers and may download or install certain language server dependencies on demand.
 We treat this path as security-sensitive and have hardened it accordingly.
 
 The most important supply chain protections are:

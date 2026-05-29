@@ -158,7 +158,7 @@ def autogen_tool_list(target_filename = "01-about/035_tools.md"):
         f.write("Tools marked as *optional* are disabled by default.\n\n")
         f.write("Tools marked as [BETA] were recently introduced and may not be fully robust yet.\n\n")
         tools_by_module = ToolRegistry().get_registered_tools_by_module()
-        priority_modules = {"serena.tools.symbol_tools": 1, "serena.tools.jetbrains_tools": 2}
+        priority_modules = {"serena.tools.symbol_tools": 1}
 
         text = TextBuilder()
         sorted_modules = sorted(tools_by_module.keys(), key=lambda m: (priority_modules.get(m, 3), m))

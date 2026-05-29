@@ -11,11 +11,8 @@ services:
       target: production
     ports:
       - "${SERENA_PORT:-9121}:9121"  # MCP server port
-      - "${SERENA_DASHBOARD_PORT:-24282}:24282"  # Dashboard port (default 0x5EDA = 24282)
     environment:
       - SERENA_DOCKER=1
     command:
-      - "uv run --directory . serena-mcp-server --transport sse --port 9121 --host 0.0.0.0"
-      # Alternatively add further arguments, e.g. a context
-      # - "uv run --directory . serena-mcp-server --transport sse --port 9121 --host 0.0.0.0 --context ide"
+      - "uv run --directory . serena start-mcp-server --transport sse --port 9121 --host 0.0.0.0"
 
