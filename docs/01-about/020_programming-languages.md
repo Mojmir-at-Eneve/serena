@@ -141,3 +141,28 @@ Some languages require additional installations or setup steps, as noted.
 
 Support for further languages can easily be added by providing a shallow adapter for a new language server implementation,
 see the [contributing guide](https://github.com/oraios/serena/blob/main/CONTRIBUTING.md) for adding a new language server adapter.
+
+## Language Registry and Auto-Detection
+
+Serena includes a central **language registry** (`src/solidlsp/language_registry.py`) that records,
+for each language:
+
+- File extensions
+- Framework detection markers (e.g. `*.sln` → C#, `package.json` → TypeScript, `Cargo.toml` → Rust)
+- Tooling requirements
+- Experimental status and supersede relationships
+
+When a project or workspace is auto-generated (no existing `project.yml`), Serena uses the registry
+to detect languages by scanning for framework markers first, then counting source-file extensions.
+All languages with confidence ≥ 0.5 are automatically enabled; lower-confidence ones are shown
+interactively (when running `serena project create`).
+
+## Degraded Language-Server Startup
+
+If one or more language servers fail to start, Serena enters **degraded mode** rather than aborting
+the whole workspace activation.  Healthy language servers continue operating.  Failed servers are
+reported in the `get_workspace_status` output so agents can inspect health and fall back to
+text-based search for affected languages.
+
+All language servers still available after a partial failure can be restarted individually via the
+`restart_language_server` tool.

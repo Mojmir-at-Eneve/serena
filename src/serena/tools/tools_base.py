@@ -16,6 +16,9 @@ from sensai.util.string import dict_string
 from serena.project import Project
 from serena.util.class_decorators import singleton
 from serena.util.inspection import iter_subclasses
+
+if TYPE_CHECKING:
+    from serena.workspace import ProjectUnit, SerenaWorkspace
 from serena.util.ls_diagnostics import DiagnosticsDiff, EditedFilePath, PublishedDiagnosticsSnapshot
 from solidlsp.ls_exceptions import SolidLSPException
 
@@ -35,7 +38,7 @@ class Component(ABC):
 
     def get_project_root(self) -> str:
         """
-        :return: the root directory of the active project, raises a ValueError if no active project configuration is set
+        :return: the root directory of the active (primary) project.
         """
         return self.project.project_root
 
@@ -44,9 +47,36 @@ class Component(ABC):
 
         return LanguageServerSymbolRetriever(self.project)
 
+    def create_language_server_symbol_retriever_for(
+        self, project: Project
+    ) -> "LanguageServerSymbolRetriever":
+        from serena.symbol import LanguageServerSymbolRetriever
+
+        return LanguageServerSymbolRetriever(project)
+
     @property
     def project(self) -> Project:
+        """The primary (root) project of the active workspace."""
         return self.agent.get_active_project_or_raise()
+
+    @property
+    def workspace(self) -> "SerenaWorkspace":
+        """The active workspace (all project units)."""
+        from serena.workspace import SerenaWorkspace
+
+        return self.agent.get_active_workspace_or_raise()
+
+    def resolve_project(self, workspace_relative_path: str) -> tuple["ProjectUnit", str]:
+        """
+        Resolve a workspace-relative path to its owning ProjectUnit and the
+        project-relative path within that unit.
+
+        In single-project workspaces this is a no-op — the returned
+        project_relative_path equals the input.
+        """
+        from serena.workspace import ProjectUnit
+
+        return self.agent.get_project_for_path(workspace_relative_path)
 
     def create_code_editor(self) -> "CodeEditor":
         return self.create_ls_code_editor()
@@ -57,6 +87,14 @@ class Component(ABC):
         if not self.agent.is_using_language_server():
             raise Exception("Cannot create LanguageServerCodeEditor; agent is not in language server mode.")
         return LanguageServerCodeEditor(self.create_language_server_symbol_retriever())
+
+    def create_ls_code_editor_for(self, project: Project) -> "LanguageServerCodeEditor":
+        """Create a code editor scoped to the given project unit."""
+        from ..code_editor import LanguageServerCodeEditor
+
+        return LanguageServerCodeEditor(
+            self.create_language_server_symbol_retriever_for(project)
+        )
 
 
 class ToolMarker:
@@ -403,14 +441,22 @@ class EditingToolWithDiagnostics(Tool, ToolMarkerCanEdit):
     DIAGNOSTICS_KEY = "diagnostics[warning-or-higher]"
 
     class DiagnosticsContext:
-        def __init__(self, tool: "EditingToolWithDiagnostics", *edited_relative_paths: str) -> None:
+        def __init__(
+            self,
+            tool: "EditingToolWithDiagnostics",
+            *edited_relative_paths: str,
+            project: Project | None = None,
+        ) -> None:
             self._tool = tool
             self._is_diagnostics_enabled = tool.ENABLE_DIAGNOSTICS and tool.agent.is_using_language_server()
             self._edited_files = [EditedFilePath(path, path) for path in edited_relative_paths]
             self._before_edit_diagnostics_snapshot: PublishedDiagnosticsSnapshot | None = None
             self._symbol_retriever: Optional["LanguageServerSymbolRetriever"] | None = None
             if self._is_diagnostics_enabled:
-                self._symbol_retriever = tool.create_language_server_symbol_retriever()
+                if project is not None:
+                    self._symbol_retriever = tool.create_language_server_symbol_retriever_for(project)
+                else:
+                    self._symbol_retriever = tool.create_language_server_symbol_retriever()
                 self._before_edit_diagnostics_snapshot = PublishedDiagnosticsSnapshot(self._edited_files, self._symbol_retriever)
 
         def __enter__(self) -> Self:

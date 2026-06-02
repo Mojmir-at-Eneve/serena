@@ -4,41 +4,31 @@ Lightweight workflow tools for the ground-truth MCP toolbox.
 
 from serena.tools import Tool, ToolMarkerDoesNotRequireActiveProject, ToolRegistry
 
-# Decision: agent guidance lives in one static string (no Jinja/context/mode prompts).
+# Agent instructions: concise, IDE-like affordances.
+# No process prescriptions, no omni-tool marketing.
 _INITIAL_INSTRUCTIONS = """\
-Serena is an LSP-backed MCP toolbox for coding agents. It exposes semantic code intelligence
-(find symbols, references, declarations, implementations, diagnostics) and editing tools that
-operate on real language-server facts rather than fragile text guessing.
+Serena is an LSP-backed MCP toolbox that gives you IDE-grade code intelligence:
+symbols, references, declarations, implementations, diagnostics, and semantic edits.
 
-## Before you start
+## Workspace activation
+If tools report "No active workspace", call `activate_project` with the IDE
+workspace root path. Serena will discover all nested projects automatically
+and activate them as a workspace.
 
-1. **Project activation.** MCP is often configured without a fixed project path in `mcp.json`.
-   The server may auto-detect a project from its working directory at startup. If tools report
-   "No active project", call `activate_project` with the **IDE workspace root path** (absolute path
-   from the host environment). Use `activate_project` with ``.`` or an empty path only when the
-   server cwd is the workspace root. This creates `.serena/project.yml` if missing; you do not need
-   a separate `serena project create` step first.
-2. Prefer symbolic tools over raw file grep/read when exploring code structure.
-3. Line numbers returned by Serena tools are **0-based**.
+## Multi-project workspaces
+When the workspace contains multiple projects, every result is prefixed with
+`[project_id]` so you know which project it belongs to. Pass paths relative
+to the workspace root; Serena routes them to the right project.
 
-## Symbol conventions
+## Grounding
+Call `get_workspace_status` at session start to see all active project units,
+their languages, language-server health, and any degraded states.
 
-Symbols are addressed by `name_path` and `relative_path` (see `find_symbol`).
-
-Examples (Python):
-- Class overview: `find_symbol` with `name_path_pattern="Foo"`, `include_body=False`, `depth=1`
-- Read a method body: `find_symbol` with `name_path_pattern="Foo/__init__"`, `include_body=True`
-- Cross-file impact: `find_referencing_symbols`
+## Line numbers
+All line numbers returned by Serena tools are **0-based**.
 
 ## Tool catalog
-
 {tool_catalog}
-
-## Editing guidance
-
-- Prefer `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` for whole-symbol edits.
-- Use `replace_content` for small intra-symbol line edits.
-- After edits, use `get_diagnostics_for_file` to verify the language server reports no new issues.
 """
 
 
@@ -54,13 +44,39 @@ def _build_tool_catalog() -> str:
 
 class InitialInstructionsTool(Tool, ToolMarkerDoesNotRequireActiveProject):
     """
-    Returns concise usage instructions for Serena's MCP tools (for clients that do not load MCP server instructions).
+    Returns concise Serena usage instructions (for clients that skip MCP server instructions).
     """
 
     def apply(self) -> str:
         """
-        Returns the Serena toolbox manual: project activation, symbol conventions, and a catalog of available tools.
-        Call this once at the start of a session if your client did not already provide MCP server instructions.
+        Returns a brief reference for Serena's tool catalog, workspace activation,
+        and multi-project path conventions.
+        Call once at session start if your client did not already provide MCP server instructions.
         """
         catalog = _build_tool_catalog()
         return _INITIAL_INSTRUCTIONS.format(tool_catalog=catalog)
+
+
+class GetWorkspaceStatusTool(Tool, ToolMarkerDoesNotRequireActiveProject):
+    """
+    Returns a health summary of the active workspace: project units, languages,
+    language-server status, and any degraded/failed states.
+    """
+
+    def apply(self) -> str:
+        """
+        Returns the current workspace health summary.
+
+        Use this at the start of a session to orient yourself: which projects are
+        active, what languages each project uses, and whether any language servers
+        failed to start.  A `[project_id]` prefix is shown for each project unit.
+        """
+        workspace = self.agent.get_active_workspace()
+        if workspace is None:
+            known = self.agent.serena_config.project_names
+            hint = f"  Known projects: {known}" if known else ""
+            return (
+                "No active workspace.  "
+                "Call `activate_project` with the workspace root path." + hint
+            )
+        return workspace.health_summary()

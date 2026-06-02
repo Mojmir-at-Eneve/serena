@@ -64,12 +64,17 @@ class LanguageServerFactory:
 class LanguageServerManager:
     """
     Manages one or more language servers for a project.
+
+    Startup is *degraded*: if some language servers fail to start, the
+    manager still exposes the healthy ones and records the failures.
+    Agents can query ``get_failed_languages()`` to learn about degraded state.
     """
 
     def __init__(
         self,
         language_servers: dict[Language, SolidLanguageServer],
         language_server_factory: LanguageServerFactory | None = None,
+        failed_languages: dict[Language, Exception] | None = None,
     ) -> None:
         """
         :param language_servers: a mapping from language to language server; the servers are assumed to be already started.
@@ -77,9 +82,11 @@ class LanguageServerManager:
             All servers are assumed to serve the same project root.
         :param language_server_factory: factory for language server creation; if None, dynamic (re)creation of language servers
             is not supported
+        :param failed_languages: languages whose language servers failed to start
         """
         self._language_servers = language_servers
         self._language_server_factory = language_server_factory
+        self._failed_languages: dict[Language, Exception] = failed_languages or {}
 
     @property
     def _default_language_server(self) -> SolidLanguageServer:
@@ -133,18 +140,28 @@ class LanguageServerManager:
             elif thread.language_server is not None:
                 language_servers[thread.language] = thread.language_server
 
-        # If any server failed to start up, raise an exception and stop all started language servers.
-        # We intentionally fail fast here. The user's intention is to work with all the specified languages,
-        # so if any of them is not available, it is better to make symbolic tool calls fail, bringing the issue to the
-        # user's attention instead of silently continuing with a subset of the language servers and potentially
-        # causing suboptimal agent behaviour.
+        # Degraded-mode startup: keep healthy servers running, record failures.
+        # Failed servers are reported via get_failed_languages() so agents can
+        # inspect health without blocking the whole project activation.
         if exceptions:
-            for ls in language_servers.values():
-                ls.stop()
-            failure_messages = "\n".join([f"{lang.value}: {e}" for lang, e in exceptions.items()])
-            raise LanguageServerManagerInitialisationError(f"Failed to start {len(exceptions)} language server(s):\n{failure_messages}")
+            failure_messages = "\n".join(
+                [f"{lang.value}: {e}" for lang, e in exceptions.items()]
+            )
+            if language_servers:
+                log.warning(
+                    "Language server manager starting in degraded mode — "
+                    "%d language server(s) failed to start:\n%s",
+                    len(exceptions),
+                    failure_messages,
+                )
+            else:
+                # All servers failed — preserve original fail-fast for total failure.
+                raise LanguageServerManagerInitialisationError(
+                    f"All {len(exceptions)} language server(s) failed to start:\n"
+                    + failure_messages
+                )
 
-        return LanguageServerManager(language_servers, factory)
+        return LanguageServerManager(language_servers, factory, failed_languages=exceptions)
 
     def _ensure_functional_ls(self, ls: SolidLanguageServer) -> SolidLanguageServer:
         if not ls.is_running():
@@ -220,6 +237,18 @@ class LanguageServerManager:
         :return: list of languages
         """
         return list(self._language_servers.keys())
+
+    def get_failed_languages(self) -> list[Language]:
+        """
+        Returns languages whose language servers failed to start.
+
+        These are available for health reporting to agents.
+        """
+        return list(self._failed_languages.keys())
+
+    def get_failure_reason(self, language: Language) -> Exception | None:
+        """Return the startup exception for a failed language, or None."""
+        return self._failed_languages.get(language)
 
     @staticmethod
     def _stop_language_server(ls: SolidLanguageServer, save_cache: bool = False, timeout: float = 2.0) -> None:

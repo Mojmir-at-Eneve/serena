@@ -93,6 +93,29 @@ additional projects. For large monorepos, consider listing only the packages you
 cross-references for.
 :::
 
+(multi-project-workspace)=
+### Multi-Project Workspace Activation
+
+When you activate a repository root, Serena performs **recursive workspace discovery**:
+it scans for nested `.serena/project.yml` files and treats each one as a **delegated project unit**.
+
+Rules:
+- Each subdirectory that contains its own `.serena/project.yml` is loaded as an independent project unit.  
+  That unit retains full ownership of its validation, ignore rules, language servers, and config — the
+  parent workspace does not touch its internals.
+- Directories in `.git`, `node_modules`, `bin`, `obj`, `target`, etc. are never scanned.
+- If no sub-projects are found, the workspace contains a single project unit (same as before).
+
+**Project identifiers in results**: when a workspace contains multiple project units, every tool
+result includes a `[project_id]` prefix so agents can tell which project each symbol, match, or
+diagnostic belongs to.  In single-project workspaces this prefix is omitted for backward compatibility.
+
+**Workspace health**: call `get_workspace_status` at the start of a session to see all active project
+units, their languages, language-server health, and any degraded/failed states.
+
+**Degraded mode**: if some language servers fail to start, the healthy ones continue operating.
+Failures are recorded and visible in `get_workspace_status` output so agents can react appropriately.
+
 (indexing)=
 ### Indexing
 
@@ -170,11 +193,14 @@ There are several ways in which you might want to work with multiple projects si
 
 ### A Single Agent Editing Multiple Projects Simultaneously
 
-If fulfilling a task requires a single agent to edit code in multiple projects, the recommended approach is to create a **monorepo folder**,
-i.e. a folder that contains all the projects as sub-folders, and open that monorepo folder as a project in Serena.
-You may also use symbolic links to create a monorepo folder if the projects are located in different places on your filesystem.
+Activate the **monorepo root** (the folder containing all sub-projects) with `activate_project`.
+Serena will discover nested projects automatically (see [multi-project workspace activation](#multi-project-workspace)).
 
-If several languages are used across the projects, list all of them in `project.yml`.
+Each sub-project retains its own language configuration, so you can have a C# backend and a
+TypeScript frontend in the same workspace with their own language servers.  Tool results include
+`[project_id]` prefixes so the agent always knows which project a match or symbol belongs to.
+
+If no sub-project config exists, list all required languages in the root `project.yml` as before.
 
 ### Multiple Agents Accessing a Single Serena Instance
 

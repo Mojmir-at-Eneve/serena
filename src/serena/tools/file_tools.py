@@ -34,9 +34,11 @@ class ReadFileTool(Tool):
             required for the task.
         :return: the full text of the file at the given relative path
         """
-        self.project.validate_relative_path(relative_path, require_not_ignored=True)
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        proj.validate_relative_path(proj_rel, require_not_ignored=True)
 
-        result = self.project.read_file(relative_path)
+        result = proj.read_file(proj_rel)
         result_lines = result.splitlines()
         if end_line is None:
             result_lines = result_lines[start_line:]
@@ -60,22 +62,25 @@ class CreateTextFileTool(EditingToolWithDiagnostics):
         :param content: the (appropriately encoded) content to write to the file
         :return: a message indicating success or failure
         """
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            # validating the destination path
-            project_root = self.get_project_root()
-            abs_path = (Path(project_root) / relative_path).resolve()
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        with self.DiagnosticsContext(self, relative_path, project=proj) as diagnostics_context:
+            abs_path = (Path(proj.project_root) / proj_rel).resolve()
             will_overwrite_existing = abs_path.exists()
 
             if will_overwrite_existing:
-                self.project.validate_relative_path(relative_path, require_not_ignored=True)
+                proj.validate_relative_path(proj_rel, require_not_ignored=True)
             else:
-                assert abs_path.is_relative_to(self.get_project_root()), (
+                assert abs_path.is_relative_to(proj.project_root), (
                     f"Cannot create file outside of the project directory, got {relative_path=}"
                 )
 
-            # writing the file
             abs_path.parent.mkdir(parents=True, exist_ok=True)
-            abs_path.write_text(content, encoding=self.project.project_config.encoding, newline=self.project.line_ending.newline_str)
+            abs_path.write_text(
+                content,
+                encoding=proj.project_config.encoding,
+                newline=proj.line_ending.newline_str,
+            )
             answer = f"File created: {relative_path}."
             if will_overwrite_existing:
                 answer += " Overwrote existing file."
@@ -100,26 +105,31 @@ class ListDirTool(Tool):
             Don't adjust unless there is really no other way to get the content required for the task.
         :return: a JSON object with the names of directories and files within the given directory
         """
-        # Check if the directory exists before validation
-        if not self.project.relative_path_exists(relative_path):
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+
+        if not proj.relative_path_exists(proj_rel):
             error_info = {
                 "error": f"Directory not found: {relative_path}",
-                "project_root": self.get_project_root(),
-                "hint": "Check if the path is correct relative to the project root",
+                "project_root": proj.project_root,
+                "hint": "Check if the path is correct relative to the workspace root",
             }
             return self._to_json(error_info)
 
-        self.project.validate_relative_path(relative_path, require_not_ignored=skip_ignored_files)
+        proj.validate_relative_path(proj_rel, require_not_ignored=skip_ignored_files)
 
         dirs, files = scan_directory(
-            os.path.join(self.get_project_root(), relative_path),
-            relative_to=self.get_project_root(),
+            os.path.join(proj.project_root, proj_rel),
+            relative_to=proj.project_root,
             recursive=recursive,
-            is_ignored_dir=self.project.is_ignored_path if skip_ignored_files else None,
-            is_ignored_file=self.project.is_ignored_path if skip_ignored_files else None,
+            is_ignored_dir=proj.is_ignored_path if skip_ignored_files else None,
+            is_ignored_file=proj.is_ignored_path if skip_ignored_files else None,
         )
 
-        result = self._to_json({"dirs": dirs, "files": files})
+        ws = self.workspace
+        labeled_dirs = [ws.label(unit.project_id, d) for d in dirs]
+        labeled_files = [ws.label(unit.project_id, f) for f in files]
+        result = self._to_json({"dirs": labeled_dirs, "files": labeled_files})
         return self._limit_length(result, max_answer_chars)
 
 
@@ -136,13 +146,14 @@ class FindFileTool(Tool):
         :param relative_path: the relative path to the directory to search in; pass "." to scan the project root
         :return: a JSON object with the list of matching files
         """
-        self.project.validate_relative_path(relative_path, require_not_ignored=True)
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        proj.validate_relative_path(proj_rel, require_not_ignored=True)
 
-        dir_to_scan = os.path.join(self.get_project_root(), relative_path)
+        dir_to_scan = os.path.join(proj.project_root, proj_rel)
 
-        # find the files by ignoring everything that doesn't match
         def is_ignored_file(abs_path: str) -> bool:
-            if self.project.is_ignored_path(abs_path):
+            if proj.is_ignored_path(abs_path):
                 return True
             filename = os.path.basename(abs_path)
             return not fnmatch(filename, file_mask)
@@ -150,12 +161,14 @@ class FindFileTool(Tool):
         _dirs, files = scan_directory(
             path=dir_to_scan,
             recursive=True,
-            is_ignored_dir=self.project.is_ignored_path,
+            is_ignored_dir=proj.is_ignored_path,
             is_ignored_file=is_ignored_file,
-            relative_to=self.get_project_root(),
+            relative_to=proj.project_root,
         )
 
-        result = self._to_json({"files": files})
+        ws = self.workspace
+        labeled_files = [ws.label(unit.project_id, f) for f in files]
+        result = self._to_json({"files": labeled_files})
         return result
 
 
@@ -215,9 +228,11 @@ class ReplaceContentTool(EditingToolWithDiagnostics):
         Performs the replacement, with additional options not exposed in the tool.
         This function can be used internally by other tools.
         """
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            self.project.validate_relative_path(relative_path, require_not_ignored=require_not_ignored)
-            with EditedFileContext(relative_path, self.create_code_editor()) as context:
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        with self.DiagnosticsContext(self, proj_rel, project=proj) as diagnostics_context:
+            proj.validate_relative_path(proj_rel, require_not_ignored=require_not_ignored)
+            with EditedFileContext(proj_rel, self.create_ls_code_editor_for(proj)) as context:
                 original_content = context.get_original_content()
                 replacer = ContentReplacer(mode=mode, allow_multiple_occurrences=allow_multiple_occurrences)
                 updated_content = replacer.replace(original_content, needle, repl)
@@ -245,9 +260,11 @@ class DeleteLinesTool(EditingToolWithDiagnostics, ToolMarkerOptional):
         :param start_line: the 0-based index of the first line to be deleted
         :param end_line: the 0-based index of the last line to be deleted
         """
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            code_editor = self.create_code_editor()
-            code_editor.delete_lines(relative_path, start_line, end_line)
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        with self.DiagnosticsContext(self, proj_rel, project=proj) as diagnostics_context:
+            code_editor = self.create_ls_code_editor_for(proj)
+            code_editor.delete_lines(proj_rel, start_line, end_line)
             return diagnostics_context.format_result(SUCCESS_RESULT)
 
 
@@ -277,11 +294,12 @@ class ReplaceLinesTool(EditingToolWithDiagnostics, ToolMarkerOptional):
         if not content.endswith("\n"):
             content += "\n"
 
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            code_editor = self.create_code_editor()
-            code_editor.delete_lines(relative_path, start_line, end_line)
-            code_editor.insert_at_line(relative_path, start_line, content)
-
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        with self.DiagnosticsContext(self, proj_rel, project=proj) as diagnostics_context:
+            code_editor = self.create_ls_code_editor_for(proj)
+            code_editor.delete_lines(proj_rel, start_line, end_line)
+            code_editor.insert_at_line(proj_rel, start_line, content)
             return diagnostics_context.format_result(SUCCESS_RESULT)
 
 
@@ -310,10 +328,11 @@ class InsertAtLineTool(EditingToolWithDiagnostics, ToolMarkerOptional):
         if not content.endswith("\n"):
             content += "\n"
 
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            code_editor = self.create_code_editor()
-            code_editor.insert_at_line(relative_path, line, content)
-
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        with self.DiagnosticsContext(self, proj_rel, project=proj) as diagnostics_context:
+            code_editor = self.create_ls_code_editor_for(proj)
+            code_editor.insert_at_line(proj_rel, line, content)
             return diagnostics_context.format_result(SUCCESS_RESULT)
 
 
@@ -352,59 +371,70 @@ class SearchForPatternTool(Tool):
         :return: A mapping from file paths to matched consecutive lines (0-based line numbers).
         """
         relative_path = relative_path.strip()
+        ws = self.workspace
+
+        # Determine which project units to search.
         if relative_path:
-            self.project.validate_relative_path(relative_path, require_not_ignored=True)
-
-        abs_path = os.path.join(self.get_project_root(), relative_path)
-        if not os.path.exists(abs_path):
-            raise FileNotFoundError(f"Relative path {relative_path} does not exist.")
-
-        if restrict_search_to_code_files:
-            matches = self.project.search_source_files_for_pattern(
-                pattern=substring_pattern,
-                relative_path=relative_path,
-                context_lines_before=context_lines_before,
-                context_lines_after=context_lines_after,
-                paths_include_glob=paths_include_glob.strip(),
-                paths_exclude_glob=paths_exclude_glob.strip(),
-                multiline=multiline,
-            )
+            # Route to the owning project unit.
+            unit, proj_rel_path = ws.resolve_unit_for_path(relative_path)
+            units_and_paths = [(unit, proj_rel_path)]
         else:
-            if os.path.isfile(abs_path):
-                rel_paths_to_search = [relative_path]
-            else:
-                _dirs, rel_paths_to_search = scan_directory(
-                    path=abs_path,
-                    recursive=True,
-                    is_ignored_dir=self.project.is_ignored_path,
-                    is_ignored_file=self.project.is_ignored_path,
-                    relative_to=self.get_project_root(),
-                )
-            # TODO (maybe): not super efficient to walk through the files again and filter if glob patterns are provided
-            #   but it probably never matters and this version required no further refactoring
-            matches = search_files(
-                rel_paths_to_search,
-                substring_pattern,
-                context_lines_before=context_lines_before,
-                context_lines_after=context_lines_after,
-                file_reader=self.project.read_file,
-                root_path=self.get_project_root(),
-                paths_include_glob=paths_include_glob,
-                paths_exclude_glob=paths_exclude_glob,
-                multiline=multiline,
-            )
+            # Workspace-wide: search all units.
+            units_and_paths = [(u, "") for u in ws.units]
 
-        # group matches by file
         file_to_matches: dict[str, list[str]] = defaultdict(list)
-        for match in matches:
-            assert match.source_file_path is not None
-            file_to_matches[match.source_file_path].append(match.to_display_string())
-
-        # capture lightweight match data for shortening before serialization
         match_lines_by_file: dict[str, list[int]] = defaultdict(list)
-        for match in matches:
-            assert match.source_file_path is not None
-            match_lines_by_file[match.source_file_path].append(match.matched_lines[0].line_number)
+        total_matches = 0
+
+        for unit, search_path in units_and_paths:
+            proj = unit.project
+            if search_path:
+                proj.validate_relative_path(search_path, require_not_ignored=True)
+            abs_path = os.path.join(proj.project_root, search_path) if search_path else proj.project_root
+
+            if not os.path.exists(abs_path):
+                continue
+
+            if restrict_search_to_code_files:
+                unit_matches = proj.search_source_files_for_pattern(
+                    pattern=substring_pattern,
+                    relative_path=search_path,
+                    context_lines_before=context_lines_before,
+                    context_lines_after=context_lines_after,
+                    paths_include_glob=paths_include_glob.strip(),
+                    paths_exclude_glob=paths_exclude_glob.strip(),
+                    multiline=multiline,
+                )
+            else:
+                if os.path.isfile(abs_path):
+                    rel_paths_to_search = [search_path]
+                else:
+                    _dirs, rel_paths_to_search = scan_directory(
+                        path=abs_path,
+                        recursive=True,
+                        is_ignored_dir=proj.is_ignored_path,
+                        is_ignored_file=proj.is_ignored_path,
+                        relative_to=proj.project_root,
+                    )
+                unit_matches = search_files(
+                    rel_paths_to_search,
+                    substring_pattern,
+                    context_lines_before=context_lines_before,
+                    context_lines_after=context_lines_after,
+                    file_reader=proj.read_file,
+                    root_path=proj.project_root,
+                    paths_include_glob=paths_include_glob,
+                    paths_exclude_glob=paths_exclude_glob,
+                    multiline=multiline,
+                )
+
+            for match in unit_matches:
+                assert match.source_file_path is not None
+                # Label the path with the project identifier in multi-project workspaces.
+                labeled_path = ws.label(unit.project_id, match.source_file_path)
+                file_to_matches[labeled_path].append(match.to_display_string())
+                match_lines_by_file[labeled_path].append(match.matched_lines[0].line_number)
+                total_matches += 1
 
         # shortened result closures, from least to most aggressive shortening
         def make_lines_only() -> str:
@@ -416,7 +446,7 @@ class SearchForPatternTool(Tool):
             return f"Match counts per file:\n{self._to_json(counts)}"
 
         def make_summary() -> str:
-            return f"Found {len(matches)} matches in {len(match_lines_by_file)} files."
+            return f"Found {total_matches} matches in {len(match_lines_by_file)} files."
 
         result = self._to_json(file_to_matches)
         return self._limit_length(

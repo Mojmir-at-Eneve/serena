@@ -27,8 +27,11 @@ class ActivateProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
             return f"Error: {e}"
         is_new_activation = self.agent.activate_project_from_path_or_name(resolved_project)
         mark_used(is_new_activation)
+        # get_project_activation_message() now returns the full workspace health summary.
         result = self.agent.get_project_activation_message()
-        result += "\nCall `initial_instructions` if you have not yet read the Serena toolbox manual."
+        result += (
+            "\nCall `initial_instructions` if you have not yet read the Serena toolbox manual."
+        )
         return result
 
 

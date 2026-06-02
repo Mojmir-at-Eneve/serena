@@ -88,21 +88,23 @@ class GetSymbolsOverviewTool(Tool, ToolMarkerSymbolicRead):
         :param depth: the depth up to which descendants shall be retrieved
         :return: a list of symbol dictionaries representing the symbol overview of the file
         """
-        symbol_retriever = self.create_language_server_symbol_retriever()
+        unit, proj_rel = self.resolve_project(relative_path)
+        proj = unit.project
+        symbol_retriever = self.create_language_server_symbol_retriever_for(proj)
 
         # The symbol overview is capable of working with both files and directories,
         # but we want to ensure that the user provides a file path.
-        file_path = os.path.join(self.project.project_root, relative_path)
+        file_path = os.path.join(proj.project_root, proj_rel)
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File or directory {relative_path} does not exist in the project.")
         if os.path.isdir(file_path):
             raise ValueError(f"Expected a file path, but got a directory path: {relative_path}. ")
-        if not symbol_retriever.can_analyze_file(relative_path):
+        if not symbol_retriever.can_analyze_file(proj_rel):
             raise ValueError(
                 f"Cannot extract symbols from file {relative_path}. Active languages: {[l.value for l in self.agent.get_active_lsp_languages()]}"
             )
 
-        symbols = symbol_retriever.get_symbol_overview(relative_path)[relative_path]
+        symbols = symbol_retriever.get_symbol_overview(proj_rel)[proj_rel]
 
         def child_inclusion_predicate(s: LanguageServerSymbol) -> bool:
             return not s.is_low_level()
@@ -188,27 +190,55 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         assert max_matches != 0, "max_matches must be > 0 or equal to -1."
         parsed_include_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in include_kinds] if include_kinds else None
         parsed_exclude_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in exclude_kinds] if exclude_kinds else None
-        symbol_retriever = self.create_language_server_symbol_retriever()
-        symbols = symbol_retriever.find(
-            name_path_pattern,
-            include_kinds=parsed_include_kinds,
-            exclude_kinds=parsed_exclude_kinds,
-            substring_matching=substring_matching,
-            within_relative_path=relative_path,
-        )
+        ws = self.workspace
+        # Determine which project units to search.
+        if relative_path:
+            unit, proj_rel_path = ws.resolve_unit_for_path(relative_path)
+            units_and_paths = [(unit, proj_rel_path)]
+        else:
+            # Workspace-wide: search all units.
+            units_and_paths = [(u, "") for u in ws.units]
+
+        from serena.symbol import LanguageServerSymbol
+
+        # Track (project_id, symbol, retriever) so the same retriever can be reused
+        # for the info-fetch step that must use the same instance.
+        symbols: list[tuple[str, LanguageServerSymbol, "LanguageServerSymbolRetriever"]] = []
+        for unit, search_path in units_and_paths:
+            proj = unit.project
+            retriever = self.create_language_server_symbol_retriever_for(proj)
+            try:
+                unit_symbols = retriever.find(
+                    name_path_pattern,
+                    include_kinds=parsed_include_kinds,
+                    exclude_kinds=parsed_exclude_kinds,
+                    substring_matching=substring_matching,
+                    within_relative_path=search_path,
+                )
+                for s in unit_symbols:
+                    symbols.append((unit.project_id, s, retriever))
+            except Exception as exc:
+                # Skip units whose language server cannot service this query.
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "find_symbol: skipping unit %s due to error: %s", unit.project_id, exc
+                )
+
         n_matches = len(symbols)
 
         def create_short_result_relative_path_to_name_paths() -> str:
             relative_path_to_name_paths: defaultdict[str, list[str]] = defaultdict(list)
-            for s in symbols:
-                relative_path_to_name_paths[s.location.relative_path or "unknown"].append(s.get_name_path())
+            for proj_id, s, _ in symbols:
+                labeled = ws.label(proj_id, s.location.relative_path or "unknown")
+                relative_path_to_name_paths[labeled].append(s.get_name_path())
             return f"Shortened result:\n{self._to_json(relative_path_to_name_paths)}"
 
         if 0 < max_matches < n_matches:
             return f"Matched {n_matches}>{max_matches=} symbols.\n" + create_short_result_relative_path_to_name_paths()
 
-        symbol_dicts = [
-            s.to_dict(
+        symbol_dicts = []
+        for proj_id, s, _ in symbols:
+            d = s.to_dict(
                 kind=True,
                 name_path=True,
                 name=False,
@@ -219,16 +249,24 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
                 children_name=True,
                 children_name_path=False,
             )
-            for s in symbols
-        ]
+            # Label relative_path with project identifier in multi-project workspaces.
+            if ws.is_multi_project and "relative_path" in d and d["relative_path"]:
+                d = dict(d)
+                d["relative_path"] = ws.label(proj_id, d["relative_path"])
+            symbol_dicts.append(d)
         if not include_body and include_info:
-            info_by_symbol = symbol_retriever.request_info_for_symbol_batch(symbols)
-            for s, s_dict in zip(symbols, symbol_dicts, strict=True):
-                if symbol_info := info_by_symbol.get(s):
-                    # In python 3.15 we could specify extra_items=True in the TypedDict definition,
-                    # https://peps.python.org/pep-0728/
-                    # If we ever upgrade to 3.15, we can remove the type: ignore[typeddict-unknown-key]
-                    s_dict["info"] = symbol_info  # type: ignore[typeddict-unknown-key]
+            # Group by retriever (same-instance required by request_info_for_symbol_batch).
+            from collections import defaultdict as _dd
+            by_retriever: dict[int, list[tuple[int, LanguageServerSymbol, "LanguageServerSymbolRetriever"]]] = _dd(list)
+            for idx, (proj_id, s, retr) in enumerate(symbols):
+                by_retriever[id(retr)].append((idx, s, retr))
+            for _, indexed in by_retriever.items():
+                retriever = indexed[0][2]
+                ls_symbols = [s for _, s, _ in indexed]
+                info_by_symbol = retriever.request_info_for_symbol_batch(ls_symbols)
+                for orig_idx, s, _ in indexed:
+                    if symbol_info := info_by_symbol.get(s):
+                        symbol_dicts[orig_idx]["info"] = symbol_info  # type: ignore[typeddict-unknown-key]
 
         grouped_symbol_dicts = self.symbol_dict_grouper.group(symbol_dicts)
         result = self._to_json(grouped_symbol_dicts)
@@ -267,11 +305,12 @@ class FindReferencingSymbolsTool(Tool, ToolMarkerSymbolicRead):
         include_body = False  # It is probably never a good idea to include the body of the referencing symbols
         parsed_include_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in include_kinds] if include_kinds else None
         parsed_exclude_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in exclude_kinds] if exclude_kinds else None
-        symbol_retriever = self.create_language_server_symbol_retriever()
+        unit, proj_rel = self.resolve_project(relative_path)
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
 
         references_in_symbols = symbol_retriever.find_referencing_symbols(
             name_path,
-            relative_file_path=relative_path,
+            relative_file_path=proj_rel,
             include_body=include_body,
             include_kinds=parsed_include_kinds,
             exclude_kinds=parsed_exclude_kinds,
@@ -284,7 +323,7 @@ class FindReferencingSymbolsTool(Tool, ToolMarkerSymbolicRead):
             if not include_body:
                 ref_relative_path = ref.symbol.location.relative_path
                 assert ref_relative_path is not None, f"Referencing symbol {ref.symbol.name} has no relative path, this is likely a bug."
-                content_around_ref = self.project.retrieve_content_around_line(
+                content_around_ref = unit.project.retrieve_content_around_line(
                     relative_file_path=ref_relative_path, line=ref.line, context_lines_before=1, context_lines_after=1
                 )
                 ref_dict["content_around_reference"] = content_around_ref.to_display_string()
@@ -354,11 +393,12 @@ class FindImplementationsTool(Tool, ToolMarkerSymbolicRead):
         include_body = False
         parsed_include_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in include_kinds] if include_kinds else None
         parsed_exclude_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in exclude_kinds] if exclude_kinds else None
-        symbol_retriever = self.create_language_server_symbol_retriever()
+        unit, proj_rel = self.resolve_project(relative_path)
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
 
         implementing_symbols = symbol_retriever.find_implementing_symbols(
             name_path,
-            relative_file_path=relative_path,
+            relative_file_path=proj_rel,
             include_body=include_body,
             include_kinds=parsed_include_kinds,
             exclude_kinds=parsed_exclude_kinds,
@@ -404,27 +444,28 @@ class FindDeclarationTool(Tool, ToolMarkerSymbolicRead):
         :param include_body: whether to include the symbol's body in the result. Default False.
         :param include_info: whether to include additional info (hover-like). Default False.
         """
-        symbol_retriever = self.create_language_server_symbol_retriever()
         relative_path = self._sanitize_input_param(relative_path)
         regex = self._sanitize_input_param(regex)
+        unit, proj_rel = self.resolve_project(relative_path)
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
 
         # find relevant location for lookup
-        editor = self.create_code_editor()
+        editor = self.create_ls_code_editor_for(unit.project)
         if not containing_symbol_name_path:
-            content = editor.read_file(relative_path)
+            content = editor.read_file(proj_rel)
             coords = find_text_coordinates(content, regex, require_unique=True)
             assert coords is not None
         else:
-            symbol = symbol_retriever.find_unique(name_path_pattern=containing_symbol_name_path, within_relative_path=relative_path)
+            symbol = symbol_retriever.find_unique(name_path_pattern=containing_symbol_name_path, within_relative_path=proj_rel)
             body_line_numers = symbol.get_body_line_numbers_or_raise()
-            content = editor.read_file(relative_path, lines=body_line_numers)
+            content = editor.read_file(proj_rel, lines=body_line_numers)
             coords = find_text_coordinates(content, regex, require_unique=True)
             assert coords is not None
             coords.line += body_line_numers[0]
 
         # retrieve declaration
         defining_symbol = symbol_retriever.find_declaration(
-            relative_file_path=relative_path,
+            relative_file_path=proj_rel,
             line=coords.line,
             column=coords.col,
             include_body=include_body,
@@ -486,26 +527,29 @@ class GetDiagnosticsForFileTool(Tool, ToolMarkerSymbolicRead):
         :param max_answer_chars: max result length; -1 for default
         :return: grouped diagnostics for the requested file.
         """
-        symbol_retriever = self.create_language_server_symbol_retriever()
+        unit, proj_rel = self.resolve_project(relative_path)
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
         diagnostics = symbol_retriever.get_file_diagnostics(
-            relative_file_path=relative_path,
+            relative_file_path=proj_rel,
             start_line=start_line,
             end_line=end_line,
             min_severity=min_severity,
         )
 
+        ws = self.workspace
         grouped_diagnostics = GroupedDiagnostics()
         for diagnostic in diagnostics:
             diag_range = diagnostic["range"]["start"]
-            name_path = self.FILE_LEVEL_DIAGNOSTIC_BUCKET
+            name_path_label = self.FILE_LEVEL_DIAGNOSTIC_BUCKET
             owner_symbol = symbol_retriever.find_diagnostic_owner_symbol(
-                relative_file_path=relative_path,
+                relative_file_path=proj_rel,
                 line=diag_range["line"],
                 column=diag_range["character"],
             )
             if owner_symbol is not None:
-                name_path = owner_symbol.get_name_path()
-            grouped_diagnostics.add(relative_path, name_path, diagnostic)
+                name_path_label = owner_symbol.get_name_path()
+            labeled_path = ws.label(unit.project_id, proj_rel)
+            grouped_diagnostics.add(labeled_path, name_path_label, diagnostic)
 
         result = self._to_json(grouped_diagnostics.get_dict())
         return self._limit_length(result, max_answer_chars)
@@ -537,10 +581,17 @@ class GetDiagnosticsForSymbolTool(Tool, ToolMarkerSymbolicRead, ToolMarkerOption
         :param max_answer_chars: max result length; -1 for default
         :return: grouped diagnostics for the requested symbol and, optionally, its referencing symbols.
         """
-        symbol_retriever = self.create_language_server_symbol_retriever()
+        # Route the reference file to the owning project unit.
+        if reference_file:
+            unit, proj_ref_file = self.resolve_project(reference_file)
+        else:
+            unit = self.workspace.primary_unit
+            proj_ref_file = reference_file
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
+        ws = self.workspace
         diagnostics_by_symbol = symbol_retriever.get_symbol_diagnostics(
             name_path=name_path,
-            reference_file=reference_file or None,
+            reference_file=proj_ref_file or None,
             check_symbol_references=check_symbol_references,
             min_severity=min_severity,
         )
@@ -550,9 +601,10 @@ class GetDiagnosticsForSymbolTool(Tool, ToolMarkerSymbolicRead, ToolMarkerOption
             relative_path = symbol.relative_path
             if relative_path is None:
                 continue
+            labeled_path = ws.label(unit.project_id, relative_path)
             symbol_name_path = symbol.get_name_path()
             for diagnostic in diagnostics:
-                grouped_diagnostics.add(relative_path, symbol_name_path, diagnostic)
+                grouped_diagnostics.add(labeled_path, symbol_name_path, diagnostic)
 
         result = self._to_json(grouped_diagnostics.get_dict())
         return self._limit_length(result, max_answer_chars)
@@ -581,13 +633,10 @@ class ReplaceSymbolBodyTool(EditingToolWithDiagnostics):
             in the programming language, including e.g. the signature line for functions.
             Depending on the language, it may or may not include a preceding docstring or other preceding annotations.
         """
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            code_editor = self.create_code_editor()
-            code_editor.replace_body(
-                name_path,
-                relative_file_path=relative_path,
-                body=body,
-            )
+        unit, proj_rel = self.resolve_project(relative_path)
+        with self.DiagnosticsContext(self, proj_rel, project=unit.project) as diagnostics_context:
+            code_editor = self.create_ls_code_editor_for(unit.project)
+            code_editor.replace_body(name_path, relative_file_path=proj_rel, body=body)
             return diagnostics_context.format_result(SUCCESS_RESULT)
 
 
@@ -611,9 +660,10 @@ class InsertAfterSymbolTool(EditingToolWithDiagnostics):
         :param body: the body/content to be inserted. The inserted code shall begin with the next line after
             the symbol.
         """
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            code_editor = self.create_code_editor()
-            code_editor.insert_after_symbol(name_path, relative_file_path=relative_path, body=body)
+        unit, proj_rel = self.resolve_project(relative_path)
+        with self.DiagnosticsContext(self, proj_rel, project=unit.project) as diagnostics_context:
+            code_editor = self.create_ls_code_editor_for(unit.project)
+            code_editor.insert_after_symbol(name_path, relative_file_path=proj_rel, body=body)
             return diagnostics_context.format_result(SUCCESS_RESULT)
 
 
@@ -637,9 +687,10 @@ class InsertBeforeSymbolTool(EditingToolWithDiagnostics):
         :param relative_path: the relative path to the file containing the symbol
         :param body: the body/content to be inserted before the line in which the referenced symbol is defined
         """
-        with self.DiagnosticsContext(self, relative_path) as diagnostics_context:
-            code_editor = self.create_code_editor()
-            code_editor.insert_before_symbol(name_path, relative_file_path=relative_path, body=body)
+        unit, proj_rel = self.resolve_project(relative_path)
+        with self.DiagnosticsContext(self, proj_rel, project=unit.project) as diagnostics_context:
+            code_editor = self.create_ls_code_editor_for(unit.project)
+            code_editor.insert_before_symbol(name_path, relative_file_path=proj_rel, body=body)
             return diagnostics_context.format_result(SUCCESS_RESULT)
 
 
@@ -665,8 +716,9 @@ class RenameSymbolTool(Tool, ToolMarkerSymbolicEdit):
         :param new_name: the new name for the symbol
         :return: result summary indicating success or failure
         """
-        code_editor = self.create_ls_code_editor()
-        status_message = code_editor.rename_symbol(name_path, relative_path=relative_path, new_name=new_name)
+        unit, proj_rel = self.resolve_project(relative_path)
+        code_editor = self.create_ls_code_editor_for(unit.project)
+        status_message = code_editor.rename_symbol(name_path, relative_path=proj_rel, new_name=new_name)
         return status_message
 
 
@@ -683,11 +735,12 @@ class SafeDeleteSymbol(Tool, ToolMarkerSymbolicEdit):
         :param name_path_pattern: name path of the symbol to delete
         :param relative_path: the relative path to the file containing the symbol to delete
         """
-        ls_symbol_retriever = self.create_language_server_symbol_retriever()
-        symbol = ls_symbol_retriever.find_unique(name_path_pattern, substring_matching=False, within_relative_path=relative_path)
+        unit, proj_rel = self.resolve_project(relative_path)
+        ls_symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
+        symbol = ls_symbol_retriever.find_unique(name_path_pattern, substring_matching=False, within_relative_path=proj_rel)
         symbol_rel_path = symbol.relative_path
         assert symbol_rel_path is not None, f"Symbol {name_path_pattern} has no relative path, this is likely a bug."
-        assert symbol_rel_path == relative_path, f"Symbol {name_path_pattern} is not in the expected relative path {relative_path}."
+        assert symbol_rel_path == proj_rel, f"Symbol {name_path_pattern} is not in the expected relative path {proj_rel}."
         symbol_name_path = symbol.get_name_path()
 
         symbol_line = symbol.line

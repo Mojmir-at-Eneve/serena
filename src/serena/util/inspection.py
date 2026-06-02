@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator
 from typing import TypeVar
 
 from serena.util.file_system import find_all_non_ignored_files
+from solidlsp.language_registry import detect_languages_in_directory
 from solidlsp.ls_config import Language
 
 T = TypeVar("T")
@@ -27,40 +28,52 @@ def iter_subclasses(
             yield from iter_subclasses(subclass, recursive, inclusion_predicate)
 
 
+# Minimum confidence threshold for auto-enabling a language without interactive prompting.
+_CONFIDENCE_THRESHOLD = 0.5
+
+
 def determine_programming_language_composition(repo_path: str) -> dict[Language, float]:
     """
     Determine the programming language composition of a repository.
 
+    Uses the central language registry for framework-marker detection first,
+    then falls back to extension-count analysis across all non-ignored files.
+    Multiple high-confidence languages can be returned (not just the top one).
+
     :param repo_path: Path to the repository to analyze
-
-    :return: Dictionary mapping languages to percentages of files matching each language
+    :return: Dictionary mapping languages to confidence scores
     """
+    # Registry-based detection on the top-level directory (fast, framework-aware).
+    registry_scores = detect_languages_in_directory(repo_path)
+
+    # Extension-count fallback across the full tree for languages not already
+    # detected by the registry scan.
     all_files = find_all_non_ignored_files(repo_path)
-
-    if not all_files:
-        return {}
-
-    # Count files for each language
-    language_counts: dict[Language, int] = {}
-    total_files = len(all_files)
+    ext_language_counts: dict[Language, int] = {}
+    total_files = len(all_files) or 1
 
     for language in Language.iter_all(include_experimental=False):
         matcher = language.get_source_fn_matcher()
-        count = 0
-
-        for file_path in all_files:
-            # Use just the filename for matching, not the full path
-            filename = os.path.basename(file_path)
-            if matcher.is_relevant_filename(filename):
-                count += 1
-
+        count = sum(
+            1 for f in all_files if matcher.is_relevant_filename(os.path.basename(f))
+        )
         if count > 0:
-            language_counts[language] = count
+            ext_language_counts[language] = count
 
-    # Convert counts to percentages
-    language_percentages: dict[Language, float] = {}
-    for language, count in language_counts.items():
-        percentage = (count / total_files) * 100
-        language_percentages[language] = round(percentage, 2)
+    # Merge: registry scores take precedence; extension counts fill the gaps.
+    merged: dict[Language, float] = {}
 
-    return language_percentages
+    for lang_value, confidence in registry_scores:
+        try:
+            lang = Language(lang_value)
+        except ValueError:
+            continue
+        merged[lang] = confidence
+
+    for language, count in ext_language_counts.items():
+        if language not in merged:
+            fraction = count / total_files
+            # Scale so extension-only detection maxes out at 0.4 (below registry scores).
+            merged[language] = round(fraction * 0.4, 4)
+
+    return merged

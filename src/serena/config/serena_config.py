@@ -291,29 +291,48 @@ class ProjectConfig(SharedConfig):
                     )
                     languages_to_use: list[str] = []
                 else:
-                    # sort languages by number of files found
-                    languages_and_percentages = sorted(
-                        language_composition.items(), key=lambda item: (item[1], item[0].get_priority()), reverse=True
+                    # Sort by (confidence, priority) descending so the highest-confidence
+                    # languages come first.
+                    languages_and_scores = sorted(
+                        language_composition.items(),
+                        key=lambda item: (item[1], item[0].get_priority()),
+                        reverse=True,
                     )
-                    # find the language with the highest percentage and enable it
-                    top_language_pair = languages_and_percentages[0]
-                    other_language_pairs = languages_and_percentages[1:]
+                    # Auto-enable all languages with confidence >= threshold.
+                    # In interactive mode, prompt for borderline ones.
+                    from serena.util.inspection import _CONFIDENCE_THRESHOLD
+
+                    top_language_pair = languages_and_scores[0]
+                    other_language_pairs = languages_and_scores[1:]
+
                     languages_to_use = [top_language_pair[0].value]
-                    # if in interactive mode, ask the user which other languages to enable
-                    if len(other_language_pairs) > 0 and interactive:
-                        print(
-                            "Detected and enabled main language '%s' (%.2f%% of source files)."
-                            % (top_language_pair[0].value, top_language_pair[1])
-                        )
-                        print(f"Additionally detected {len(other_language_pairs)} other language(s).\n")
-                        print("Note: Enable only languages you need symbolic retrieval/editing capabilities for.")
-                        print("      Additional language servers use resources and some languages may require additional")
-                        print("      system-level installations/configuration (see Serena documentation).")
-                        print("\nWhich additional languages do you want to enable?")
-                        for lang, perc in other_language_pairs:
-                            enable = ask_yes_no("Enable %s (%.2f%% of source files)?" % (lang.value, perc), default=False)
-                            if enable:
-                                languages_to_use.append(lang.value)
+                    # Auto-enable additional high-confidence languages (non-interactive).
+                    for lang, score in other_language_pairs:
+                        if score >= _CONFIDENCE_THRESHOLD:
+                            languages_to_use.append(lang.value)
+                            log.info(
+                                "Auto-enabling language '%s' (confidence=%.2f)", lang.value, score
+                            )
+                    already_enabled = set(languages_to_use)
+                    # In interactive mode, ask about the remaining ones.
+                    if interactive:
+                        remaining = [(l, s) for l, s in other_language_pairs if l.value not in already_enabled]
+                        if remaining:
+                            print(
+                                "Detected and enabled: %s."
+                                % ", ".join(f"{v} (conf={s:.2f})" for v, s in [
+                                    (top_language_pair[0].value, top_language_pair[1])
+                                ] + [(l.value, s) for l, s in languages_and_scores if l.value in already_enabled and l.value != top_language_pair[0].value])
+                            )
+                            print(f"Additionally detected {len(remaining)} other language(s).\n")
+                            print("Note: Additional language servers use resources and may require extra system setup.")
+                            print("\nEnable additional languages?")
+                            for lang, score in remaining:
+                                enable = ask_yes_no(
+                                    f"Enable {lang.value} (confidence={score:.2f})?", default=False
+                                )
+                                if enable:
+                                    languages_to_use.append(lang.value)
                         print()
                 log.info("Using languages: %s", languages_to_use)
             else:

@@ -21,6 +21,7 @@ from serena.task_executor import TaskExecutor
 from serena.tools import ReplaceContentTool, Tool, ToolMarker, ToolRegistry
 from serena.util.inspection import iter_subclasses
 from serena.util.logging import MemoryLogHandler
+from serena.workspace import ProjectUnit, SerenaWorkspace
 from solidlsp.ls_config import Language
 
 log = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class SerenaAgent:
         serena_config: SerenaConfig | None = None,
         memory_log_handler: MemoryLogHandler | None = None,
     ):
-        self._active_project: Project | None = None
+        self._active_workspace: SerenaWorkspace | None = None
         self._project_activation_callback = project_activation_callback
         self.version = serena_version()
         self.serena_config = serena_config or SerenaConfig.from_config_file()
@@ -168,16 +169,25 @@ class SerenaAgent:
             except Exception as e:
                 log.error("Error activating project '%s' at startup: %s", project, e, exc_info=e)
 
-        self._base_toolset = self._create_base_toolset(self.serena_config, self._active_project)
+        self._base_toolset = self._create_base_toolset(
+            self.serena_config, self._active_workspace
+        )
         self._exposed_tools = self._base_toolset.to_available_tools(self._all_tools)
         self._update_active_tools()
         log.info("Exposed tools (%s): %s", len(self._exposed_tools), self._exposed_tools.tool_names)
 
     @classmethod
-    def _create_base_toolset(cls, serena_config: SerenaConfig, project: Project | None) -> ToolSet:
+    def _create_base_toolset(
+        cls,
+        serena_config: SerenaConfig,
+        workspace: SerenaWorkspace | None,
+    ) -> ToolSet:
         tool_inclusion_definitions: list[ToolInclusionDefinition] = [serena_config]
-        if project is not None:
-            tool_inclusion_definitions.append(project.project_config)
+        if workspace is not None:
+            # Apply the primary (root) project config for workspace-level tool inclusion.
+            tool_inclusion_definitions.append(
+                workspace.primary_unit.project.project_config
+            )
         return ToolSet.default().apply(*tool_inclusion_definitions)
 
     def _check_shell_settings(self) -> None:
@@ -190,14 +200,45 @@ class SerenaAgent:
     def get_exposed_tool_instances(self) -> list[Tool]:
         return list(self._exposed_tools.tools)
 
+    # ------------------------------------------------------------------
+    # Workspace access
+    # ------------------------------------------------------------------
+
+    def get_active_workspace(self) -> SerenaWorkspace | None:
+        return self._active_workspace
+
+    def get_active_workspace_or_raise(self) -> SerenaWorkspace:
+        if self._active_workspace is None:
+            raise ValueError(
+                "No active workspace. Call `activate_project` with the workspace root path."
+            )
+        return self._active_workspace
+
+    # ------------------------------------------------------------------
+    # Project access — backward-compatible shims that return the primary unit
+    # ------------------------------------------------------------------
+
     def get_active_project(self) -> Project | None:
-        return self._active_project
+        """Return the primary (root) project of the active workspace, or None."""
+        if self._active_workspace is None:
+            return None
+        return self._active_workspace.primary_unit.project
 
     def get_active_project_or_raise(self) -> Project:
-        project = self._active_project
-        if project is None:
-            raise ValueError("No active project. Please activate a project first.")
-        return project
+        """Return the primary (root) project, or raise if no workspace is active."""
+        return self.get_active_workspace_or_raise().primary_unit.project
+
+    def get_project_for_path(self, workspace_relative_path: str) -> tuple[ProjectUnit, str]:
+        """
+        Resolve a workspace-relative path to its owning ProjectUnit and the
+        corresponding project-relative path.
+
+        :param workspace_relative_path: path relative to workspace root
+        :return: (ProjectUnit, project_relative_path)
+        """
+        return self.get_active_workspace_or_raise().resolve_unit_for_path(
+            workspace_relative_path
+        )
 
     def get_log_inspection_instructions(self) -> str:
         log_path = SerenaPaths().last_returned_log_file_path
@@ -207,25 +248,18 @@ class SerenaAgent:
 
     def _update_active_tools(self) -> None:
         tool_set = self._base_toolset
-        if self._active_project is not None:
-            tool_set = tool_set.apply(self._active_project.project_config)
-            if self._active_project.project_config.read_only:
+        primary = self.get_active_project()
+        if primary is not None:
+            tool_set = tool_set.apply(primary.project_config)
+            if primary.project_config.read_only:
                 tool_set = tool_set.without_editing_tools()
         self._active_tools = tool_set.to_available_tools(self._all_tools)
         log.info("Active tools (%s): %s", len(self._active_tools), ", ".join(self._active_tools.tool_names))
 
     def get_project_activation_message(self) -> str:
-        proj = self.get_active_project_or_raise()
-        if proj.is_newly_created:
-            msg = f"Created and activated project '{proj.project_name}' at {proj.project_root}."
-        else:
-            msg = f"Activated project '{proj.project_name}' at {proj.project_root}."
-        languages_str = ", ".join(lang.value for lang in proj.project_config.languages)
-        msg += f"\nProgramming languages: {languages_str}."
-        msg += f"\nFile encoding: {proj.project_config.encoding}."
-        if proj.project_config.initial_prompt:
-            msg += f"\nProject-specific instructions:\n{proj.project_config.initial_prompt}"
-        return msg
+        """Return the workspace health summary shown to agents after activation."""
+        ws = self.get_active_workspace_or_raise()
+        return ws.health_summary()
 
     def issue_task(self, task: Callable[[], T], name: str | None = None, logged: bool = True, timeout: float | None = None):
         return self._task_executor.issue_task(task, name=name, logged=logged, timeout=timeout)
@@ -233,43 +267,100 @@ class SerenaAgent:
     def execute_task(self, task: Callable[[], T], name: str | None = None, logged: bool = True, timeout: float | None = None) -> T:
         return self._task_executor.execute_task(task, name=name, logged=logged, timeout=timeout)
 
-    def _activate_project(self, project: Project, update_active_tools: bool = True) -> bool:
-        if self._active_project is not None and self._active_project.project_root == project.project_root:
+    def _activate_workspace(
+        self, workspace: SerenaWorkspace, update_active_tools: bool = True
+    ) -> bool:
+        """Swap in *workspace* as the active workspace, shutting down the previous one."""
+        if (
+            self._active_workspace is not None
+            and self._active_workspace.workspace_root == workspace.workspace_root
+        ):
             return False
 
-        log.info("Activating %s at %s", project.project_name, project.project_root)
-        if self._active_project is not None:
-            self._active_project.shutdown()
+        log.info("Activating workspace at %s", workspace.workspace_root)
+        if self._active_workspace is not None:
+            self._active_workspace.shutdown()
 
-        self._active_project = project
-        project.set_agent(self)
+        self._active_workspace = workspace
+
+        # Wire each project unit back to this agent.
+        for unit in workspace.units:
+            unit.project.set_agent(self)
 
         if update_active_tools:
             self._update_active_tools()
 
-        def init_language_server_manager() -> None:
-            with LogTime("Language server initialization", logger=log):
-                self.reset_language_server_manager()
+        # Initialise language server managers for all project units in parallel.
+        def init_all_ls() -> None:
+            with LogTime("Workspace language-server initialisation", logger=log):
+                for unit in workspace.units:
+                    try:
+                        unit.project.create_language_server_manager()
+                    except Exception as exc:
+                        log.error(
+                            "Language server initialisation failed for unit %s: %s",
+                            unit.project_id,
+                            exc,
+                            exc_info=exc,
+                        )
 
-        self.issue_task(init_language_server_manager)
+        self.issue_task(init_all_ls)
 
         if self._project_activation_callback is not None:
             self._project_activation_callback()
         return True
 
-    def activate_project_from_path_or_name(self, project_root_or_name: str, update_active_tools: bool = True) -> bool:
-        project_instance: Project | None = self.serena_config.get_project(project_root_or_name)
-        if project_instance is not None:
-            log.info("Found registered project '%s' at %s", project_instance.project_name, project_instance.project_root)
-        elif os.path.isdir(project_root_or_name):
-            project_instance = self.serena_config.add_project_from_path(project_root_or_name)
-            log.info("Added new project %s for path %s", project_instance.project_name, project_instance.project_root)
+    # Keep the old name for backward compatibility (MCP tool calls this).
+    def activate_project_from_path_or_name(
+        self, project_root_or_name: str, update_active_tools: bool = True
+    ) -> bool:
+        """
+        Activate a workspace rooted at *project_root_or_name*.
 
-        if project_instance is None:
-            raise ProjectNotFoundError(
-                f"Project '{project_root_or_name}' not found. Existing project names: {self.serena_config.project_names}"
+        Accepts an absolute path to a directory, a registered project name, or
+        an empty string / "." for the server cwd.  Recursively discovers
+        sub-projects and wires them up as a SerenaWorkspace.
+        """
+        # Resolve the root directory.
+        root = self._resolve_workspace_root(project_root_or_name)
+
+        # Discover workspace (finds nested .serena/project.yml).
+        workspace = SerenaWorkspace.discover_and_create(root, self.serena_config)
+
+        # Register the primary project in global config for backward compat
+        # (so it shows up in project_names etc.). Ignore if already registered.
+        primary = workspace.primary_unit.project
+        if self.serena_config.get_registered_project(primary.project_root) is None:
+            from serena.config.serena_config import RegisteredProject as _RP
+            self.serena_config.add_registered_project(
+                _RP.from_project_instance(primary)
             )
-        return self._activate_project(project_instance, update_active_tools=update_active_tools)
+
+        return self._activate_workspace(workspace, update_active_tools=update_active_tools)
+
+    def _resolve_workspace_root(self, project_root_or_name: str) -> str:
+        """
+        Resolve a project name, absolute path, or empty string to an absolute
+        directory path that can serve as a workspace root.
+        """
+        # Empty / "." → server cwd.
+        if not project_root_or_name or project_root_or_name.strip() in (".", ""):
+            return os.getcwd()
+
+        # Registered project name?
+        registered: Project | None = self.serena_config.get_project(project_root_or_name)
+        if registered is not None:
+            return registered.project_root
+
+        # Absolute or relative directory path.
+        candidate = os.path.abspath(project_root_or_name)
+        if os.path.isdir(candidate):
+            return candidate
+
+        raise ProjectNotFoundError(
+            f"Project '{project_root_or_name}' not found. "
+            f"Known projects: {self.serena_config.project_names}"
+        )
 
     def get_active_tool_names(self) -> list[str]:
         return self._active_tools.tool_names
@@ -281,10 +372,10 @@ class SerenaAgent:
         result_str = "Current configuration:\n"
         result_str += f"Serena version: {self.version}\n"
         result_str += f"Log level: {self.serena_config.log_level}, trace_lsp={self.serena_config.trace_lsp_communication}\n"
-        if self._active_project is not None:
-            result_str += f"Active project: {self._active_project.project_name}\n"
+        if self._active_workspace is not None:
+            result_str += self._active_workspace.health_summary() + "\n"
         else:
-            result_str += "No active project\n"
+            result_str += "No active workspace\n"
         result_str += "Available projects:\n" + "\n".join(self.serena_config.project_names) + "\n"
         result_str += "Active tools:\n"
         for i in range(0, len(self._active_tools.tool_names), 4):
@@ -307,8 +398,9 @@ class SerenaAgent:
         return self.get_tool(ToolRegistry().get_tool_class_by_name(tool_name))
 
     def get_language_server_manager(self) -> LanguageServerManager | None:
-        if self._active_project is not None:
-            return self._active_project.language_server_manager
+        project = self.get_active_project()
+        if project is not None:
+            return project.language_server_manager
         return None
 
     def get_language_server_manager_or_raise(self) -> LanguageServerManager:
@@ -335,9 +427,9 @@ class SerenaAgent:
 
     def on_shutdown(self, timeout: float = 2.0) -> None:
         log.info("SerenaAgent shutting down …")
-        if self._active_project is not None:
-            self._active_project.shutdown(timeout=timeout)
-            self._active_project = None
+        if self._active_workspace is not None:
+            self._active_workspace.shutdown(timeout=timeout)
+            self._active_workspace = None
 
     def shutdown(self) -> None:
         self.on_shutdown()
@@ -348,9 +440,20 @@ class SerenaAgent:
 
     @contextmanager
     def active_project_context(self, project: Project) -> Iterator[None]:
-        original_project = self._active_project
-        self._active_project = project
+        """
+        Temporarily override the active project for the duration of a with-block.
+
+        Used mainly in tests.  In a workspace context this swaps the entire
+        workspace to a single-unit workspace wrapping *project*.
+        """
+        from serena.workspace import ProjectUnit, SerenaWorkspace
+
+        original_workspace = self._active_workspace
+        unit = ProjectUnit(project=project, workspace_relative_path="")
+        temp_workspace = SerenaWorkspace(project.project_root, [unit])
+        project.set_agent(self)
+        self._active_workspace = temp_workspace
         try:
             yield
         finally:
-            self._active_project = original_project
+            self._active_workspace = original_workspace
