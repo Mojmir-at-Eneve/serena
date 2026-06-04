@@ -924,7 +924,7 @@ class TestSerenaAgent:
             )
 
         # special additional test for Java, since Eclipse returns hover in a complex format and we want to make sure to get it right
-        if symbol["kind"] == SymbolKind.Class.name and serena_agent.get_active_lsp_languages() == [Language.JAVA]:
+        if symbol_kind == SymbolKind.Class.name and serena_agent.get_active_lsp_languages() == [Language.JAVA]:
             assert "A simple model class" in symbol_info, f"Java class docstring not found in symbol info: {symbol}"
 
     @pytest.mark.parametrize("serena_agent,case", FIND_SYMBOL_REFERENCES_CASES, indirect=["serena_agent"])
