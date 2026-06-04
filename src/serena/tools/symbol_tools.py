@@ -363,6 +363,16 @@ class FindReferencingSymbolsTool(Tool, ToolMarkerSymbolicRead):
         shortened_results = [make_refs_without_context, make_per_file_counts, make_summary]
 
         result_json = self._to_json(result)
+
+        # When empty, add a scope note so agents do not assume the symbol is unused project-wide.
+        if not reference_dicts:
+            scope_note = (
+                "\nNo references found within the currently active project scope. "
+                "If this symbol is consumed by other projects, activate the parent workspace "
+                "(the directory containing all sibling projects) to find cross-project references."
+            )
+            return result_json + scope_note
+
         return self._limit_length(result_json, max_answer_chars, shortened_result_factories=shortened_results)
 
 

@@ -1282,6 +1282,15 @@ class TestSerenaAgent:
             assert "referenced in" in result, f"Expected reference information in result, but got: {result}"
 
     @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_SUCCEEDS_CASES, indirect=["serena_agent"])
+    def test_find_referencing_symbols_empty_includes_scope_note(
+        self, serena_agent: SerenaAgent, case: SafeDeleteCase
+    ) -> None:
+        """Empty reference results should explain project-scope limits, not imply zero usage."""
+        find_refs_tool = serena_agent.get_tool(FindReferencingSymbolsTool)
+        result = find_refs_tool.apply(name_path=case.name_path, relative_path=case.relative_path)
+        assert "currently active project scope" in result
+
+    @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_SUCCEEDS_CASES, indirect=["serena_agent"])
     def test_safe_delete_symbol_succeeds_when_no_references(self, serena_agent: SerenaAgent, case: SafeDeleteCase):
         """
         Tests that SafeDeleteSymbol successfully deletes a symbol that has no references
