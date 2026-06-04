@@ -366,8 +366,8 @@ class SearchForPatternTool(Tool):
         :param restrict_search_to_code_files: whether to search only files containing analyzable code symbols
             (useful when looking for class/method definitions); otherwise also search non-code files.
         :param multiline: whether to apply multi-line matching (default: True), enabling the flags re.DOTALL and re.MULTILINE
-        :param max_answer_chars: if the output exceeds this many characters, a progressively shortened summary is returned instead.
-            ``-1`` uses the configured default.
+        :param max_answer_chars: Maximum number of characters in the response. -1 uses the configured default.
+            Prefer narrowing the search with relative_path or paths_include_glob before raising this limit.
         :return: A mapping from file paths to matched consecutive lines (0-based line numbers).
         """
         relative_path = relative_path.strip()

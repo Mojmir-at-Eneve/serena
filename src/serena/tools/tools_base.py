@@ -307,7 +307,9 @@ class Tool(Component):
             raise ValueError(f"Must be positive or the default (-1), got: {max_answer_chars=}")
         if (n_chars := len(result)) > max_answer_chars:
             too_long_msg = (
-                f"The answer is too long ({n_chars} characters). " + "You can adjust your query or raise the max_answer_chars parameter."
+                f"WARNING: Result truncated ({n_chars} chars returned, limit is {max_answer_chars}). "
+                "Narrow the search using the relative_path or paths_include_glob parameters, "
+                "or raise max_answer_chars if no other way exists."
             )
             if shortened_result_factories is not None:
                 # try each shortening closure in order;
