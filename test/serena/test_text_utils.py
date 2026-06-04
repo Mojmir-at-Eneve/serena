@@ -2,7 +2,22 @@ import re
 
 import pytest
 
-from serena.util.text_utils import LineType, search_files, search_text
+from serena.util.text_utils import LineType, find_all_text_coordinates, find_text_coordinates, search_files, search_text
+
+
+class TestFindTextCoordinates:
+    def test_find_all_text_coordinates_returns_every_match(self) -> None:
+        content = "alpha (foo) beta (foo) gamma (bar)"
+        coords = find_all_text_coordinates(content, r"\((\w+)\)")
+        assert len(coords) == 3
+        assert coords[0].line == 0 and coords[0].col == content.index("foo")
+        assert coords[1].line == 0 and coords[1].col == content.index("foo", coords[0].col + 1)
+        assert coords[2].line == 0 and coords[2].col == content.index("bar")
+
+    def test_find_text_coordinates_require_unique_unchanged(self) -> None:
+        content = "only (one) here"
+        with pytest.raises(ValueError, match="Match must be unique"):
+            find_text_coordinates(content, r"\((\w+)\)", require_unique=True)
 
 
 class TestSearchText:
