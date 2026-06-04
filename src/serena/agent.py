@@ -129,6 +129,7 @@ class SerenaAgent:
         memory_log_handler: MemoryLogHandler | None = None,
     ):
         self._active_workspace: SerenaWorkspace | None = None
+        self._last_workspace_replacement_warning: str | None = None
         self._project_activation_callback = project_activation_callback
         self.version = serena_version()
         self.serena_config = serena_config or SerenaConfig.from_config_file()
@@ -261,6 +262,12 @@ class SerenaAgent:
         ws = self.get_active_workspace_or_raise()
         return ws.health_summary()
 
+    def consume_last_workspace_replacement_warning(self) -> str | None:
+        """Return and clear the warning set when the active workspace was replaced."""
+        warning = self._last_workspace_replacement_warning
+        self._last_workspace_replacement_warning = None
+        return warning
+
     def issue_task(self, task: Callable[[], T], name: str | None = None, logged: bool = True, timeout: float | None = None):
         return self._task_executor.issue_task(task, name=name, logged=logged, timeout=timeout)
 
@@ -275,7 +282,18 @@ class SerenaAgent:
             self._active_workspace is not None
             and self._active_workspace.workspace_root == workspace.workspace_root
         ):
+            self._last_workspace_replacement_warning = None
             return False
+
+        # Decision: warn when agents activate a child project after a parent/multi-project
+        # workspace, so they know prior context was dropped (not a silent no-op).
+        self._last_workspace_replacement_warning = None
+        if self._active_workspace is not None:
+            self._last_workspace_replacement_warning = (
+                "NOTE: The previously active workspace has been replaced. "
+                "If you intended to work across multiple projects simultaneously, "
+                "activate the shared parent directory instead of individual project subdirectories."
+            )
 
         log.info("Activating workspace at %s", workspace.workspace_root)
         if self._active_workspace is not None:

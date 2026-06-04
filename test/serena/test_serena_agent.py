@@ -4,6 +4,7 @@ import os
 import re
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import dataclass
@@ -1320,6 +1321,20 @@ class TestPromptProvision:
 
         result2 = self._call_tool(serena_agent, ActivateProjectTool, project=project_name, session_id=session)
         self._assert_activation_message(result2, project_name)
+
+    def test_activate_second_project_warns_workspace_replaced(self, serena_config) -> None:
+        python_path = str(get_repo_path(Language.PYTHON))
+        go_path = str(get_repo_path(Language.GO))
+        if not Path(python_path).exists() or not Path(go_path).exists():
+            pytest.skip("Python or Go test repo not available")
+
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        try:
+            self._call_tool(agent, ActivateProjectTool, project=python_path, session_id="s1")
+            result = self._call_tool(agent, ActivateProjectTool, project=go_path, session_id="s2")
+            assert "previously active workspace has been replaced" in result
+        finally:
+            agent.on_shutdown(timeout=5)
 
     def test_activate_project_from_cwd_when_no_path_given(self, serena_config) -> None:
         repo_path = get_repo_path(Language.PYTHON)
