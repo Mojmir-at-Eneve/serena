@@ -9,7 +9,6 @@ Three tools:
 
 import json
 import os
-from dataclasses import asdict
 from typing import Literal
 
 from serena.config.serena_config import ProjectCommand
@@ -149,7 +148,7 @@ class RunProjectCommandTool(Tool, ToolMarkerCanEdit):
         cmd = project_config.commands[name]
         cwd = self.get_project_root()
         raw = execute_shell_command(cmd.command, cwd=cwd, capture_stderr=capture_stderr)
-        label = f"{name}: {cmd.command}" if cmd.description else f"{name}: {cmd.command}"
+        label = f"{name} ({cmd.description}): {cmd.command}" if cmd.description else f"{name}: {cmd.command}"
         result = CommandResult(
             command=cmd.command,
             stdout=raw.stdout,

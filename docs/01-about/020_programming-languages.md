@@ -161,7 +161,7 @@ interactively (when running `serena project create`).
 
 If one or more language servers fail to start, Serena enters **degraded mode** rather than aborting
 the whole workspace activation.  Healthy language servers continue operating.  Failed servers are
-reported in the `get_workspace_status` output so agents can inspect health and fall back to
+reported in the `start_here` output so agents can inspect health and fall back to
 text-based search for affected languages.
 
 All language servers still available after a partial failure can be restarted individually via the

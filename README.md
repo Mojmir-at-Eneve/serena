@@ -16,10 +16,11 @@ Serena is a **Model Context Protocol (MCP) server** that gives coding agents IDE
 
 - **Ground-truth code intelligence** — symbols, references, declarations, implementations, diagnostics (not grep guesses)
 - **Semantic editing** — replace symbol bodies, insert around symbols, rename via LSP
-- **File-level utilities** — read/search/replace, directory listing, shell commands
+- **Search and replace** — pattern-based text edits with literal/regex, dry-run, and include/exclude filters
+- **Shell commands** — run arbitrary commands or save named project commands (test/lint/build)
 - **40+ languages** via [SolidLSP](src/solidlsp/) (open-source language servers)
 
-There is **no** bundled agent persona, memory system, JetBrains plugin integration, or context/mode prompt machinery. The host agent uses Serena as a **toolbox**; call `initial_instructions` (or read MCP server instructions) for usage guidance.
+There is **no** bundled agent persona, memory system, JetBrains plugin integration, or context/mode prompt machinery. The host agent uses Serena as a **toolbox**; call `start_here` (or read MCP server instructions) for usage guidance.
 
 ## Quick Start
 
@@ -74,7 +75,7 @@ You do **not** need a project path in `mcp.json`.
 }
 ```
 
-At startup Serena **auto-detects** the project from the MCP subprocess working directory (`.serena/project.yml` or `.git` in cwd or parents). If detection fails (for example with a global MCP config whose cwd is not the workspace), the agent should call **`activate_project`** with the IDE workspace root path; that also creates `.serena/project.yml` when missing.
+At startup Serena **auto-detects** the project from the MCP subprocess working directory (`.serena/project.yml` or `.git` in cwd or parents). If detection fails (for example with a global MCP config whose cwd is not the workspace), the agent should call **`manage_project`** (action=activate) with the IDE workspace root path; that also creates `.serena/project.yml` when missing.
 
 **Without a global `serena` install**, point MCP at `uv run` in your Serena clone (still no project path in args):
 
@@ -101,7 +102,7 @@ If the host already exposes tools that overlap with Serena’s, tune the tool se
 
 ### When you start the server yourself
 
-Only needed for **HTTP/SSE transport** (you run the server and point the client at a URL) or **debugging** from a terminal:
+Only needed for **debugging** from a terminal:
 
 ```bash
 serena start-mcp-server --project /path/to/your/project
@@ -111,7 +112,7 @@ See [Running the MCP Server](docs/02-usage/020_running.md) and [Connecting Your 
 
 ## Default tools
 
-Symbolic read/write, diagnostics, file utilities, `activate_project`, `get_current_config`, and `initial_instructions`. Optional tools (e.g. line-based edits, `restart_language_server`) can be enabled via `included_optional_tools` in config.
+Symbol navigation (`find_symbol`, `find_usages`, `find_definition`), semantic edits (`rewrite_symbol`, `inject_code`, `rename_symbol`), diagnostics (`check_errors`), search and replace, shell commands, and project management (`start_here`, `manage_project`). Optional tools (e.g. `restart_language_server`, `check_symbol_errors`) can be enabled via `included_optional_tools` in config.
 
 Run `serena tools list --all` for the full registry.
 

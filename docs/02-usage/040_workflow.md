@@ -70,7 +70,7 @@ Any keys defined therein will override the respective key in `project.yml`.
 #### Additional Workspace Folders (Cross-Package References)
 
 In monorepos or multi-package setups, Serena's language server normally only sees symbols within the
-project root. To enable cross-package references (e.g. `find_referencing_symbols` discovering usages
+project root. To enable cross-package references (e.g. `find_usages` discovering usages
 in sibling packages), configure `additional_workspace_folders` in your `project.yml`:
 
 ```yaml
@@ -110,11 +110,11 @@ Rules:
 result includes a `[project_id]` prefix so agents can tell which project each symbol, match, or
 diagnostic belongs to.  In single-project workspaces this prefix is omitted for backward compatibility.
 
-**Workspace health**: call `get_workspace_status` at the start of a session to see all active project
+**Workspace health**: call `start_here` at the start of a session to see all active project
 units, their languages, language-server health, and any degraded/failed states.
 
 **Degraded mode**: if some language servers fail to start, the healthy ones continue operating.
-Failures are recorded and visible in `get_workspace_status` output so agents can react appropriately.
+Failures are recorded and visible in the `start_here` output so agents can react appropriately.
 
 (indexing)=
 ### Indexing
@@ -139,7 +139,7 @@ You can either choose to do this
       * "Activate the project /path/to/my_project" (for first-time activation with auto-creation)
       * "Activate the project my_project"
    
-   This requires the `activate_project` tool (enabled by default unless a project is fixed at startup).
+   This uses the `manage_project` tool (action=activate, enabled by default unless a project is fixed at startup).
 
  * when the MCP server starts, by passing the project path or name: `--project <path|name>` or `--project-from-cwd`
 
@@ -193,7 +193,7 @@ There are several ways in which you might want to work with multiple projects si
 
 ### A Single Agent Editing Multiple Projects Simultaneously
 
-Activate the **monorepo root** (the folder containing all sub-projects) with `activate_project`.
+Activate the **monorepo root** (the folder containing all sub-projects) with `manage_project`.
 Serena will discover nested projects automatically (see [multi-project workspace activation](#multi-project-workspace)).
 
 Each sub-project retains its own language configuration, so you can have a C# backend and a
@@ -204,10 +204,9 @@ If no sub-project config exists, list all required languages in the root `projec
 
 ### Multiple Agents Accessing a Single Serena Instance
 
-If you want multiple agents to access the same project via a single Serena instance,
-i.e. you do not want several instances of Serena (including its language servers) to be running,
-you can achieve this by [starting the Serena MCP server in HTTP mode](streamable-http)
-and connecting all client agents to the same HTTP endpoint.
+If you want multiple agents to access the same project via a single Serena instance
+(to avoid running multiple language server processes), start one Serena instance and
+connect all client agents to the same MCP server process.
 The agents will then share the resources of the single Serena instance.
 
 ### Multiple Agents Working on Different Projects

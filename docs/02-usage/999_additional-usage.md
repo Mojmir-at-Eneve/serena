@@ -12,7 +12,7 @@ and then continue with the implementation in another session.
 
 For long and complicated tasks, or tasks where Serena has read a lot of content, you
 may come close to the limits of context tokens. In that case, it is often a good idea to continue
-in a new conversation. In a new conversation, ask the agent to read `initial_instructions` again and summarize where you left off
+in a new conversation. In a new conversation, ask the agent to call `start_here` again and summarize where you left off
 (e.g. from your issue tracker or a short note in the repo). On the up-side, since in a
 single session there is no summarization involved, Serena does not usually get lost (unlike some
 other agents that summarize under the hood), and it is also instructed to occasionally check whether

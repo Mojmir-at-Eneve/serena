@@ -22,65 +22,35 @@ The main entry point is:
 
     serena start-mcp-server [options]
 
-How you use that command depends on the **transport**:
+Serena uses **stdio** as its transport. The MCP client spawns `serena start-mcp-server` as a
+subprocess and communicates over the process's standard input and output.
 
-| Transport | Who starts the server | Typical use |
-|-----------|------------------------|-------------|
-| **stdio** (default) | The MCP **client** spawns `start-mcp-server` as a subprocess | Cursor, VS Code, Claude Code, most IDE integrations |
-| **streamable-http** / **sse** | **You** start the server; the client connects to a URL | Remote setups, clients that only speak HTTP, debugging |
+**You usually do not start the server in a terminal.** Configure the client with the launch
+command (see [Configuring Your MCP Client](030_clients)). When you open a chat or enable the
+MCP server in the IDE, the client starts Serena, keeps one process per configured server, and
+stops it when the session ends.
 
-Serena does **not** start a web dashboard on launch in the current deployment. Older documentation may still describe a dashboard; that is not part of the default MCP lifecycle.
-
-### Standard I/O Mode
-
-In **stdio** mode, the MCP client runs `serena start-mcp-server` and communicates over the process’s standard input and output. This is the default (`--transport` omitted or `stdio`).
-
-**You usually do not start the server in a terminal.** Configure the client with the launch command (see [Configuring Your MCP Client](030_clients)). When you open a chat or enable the MCP server in the IDE, the client starts Serena, keeps one process per configured server, and stops it when the session ends.
-
-That design is intentional: stdio MCP servers have no listening port; nothing useful is running until the client spawns the subprocess.
+That design is intentional: stdio MCP servers have no listening port; nothing useful is running
+until the client spawns the subprocess.
 
 **When manual startup still makes sense:**
 
 - **Debugging** — reproduce logs, flags, or project activation in a shell before fixing `mcp.json`.
-- **HTTP/SSE mode** — you must start the server yourself and give the client a URL (see [Streamable HTTP Mode](streamable-http) below).
 
 For a minimal local smoke test (not how IDEs run day to day):
 
     serena start-mcp-server
 
-With no `--project`, Serena **auto-detects** the project root from the process working directory (`.serena/project.yml` or `.git`). Use an explicit path only when debugging or when cwd is not the workspace:
+With no `--project`, Serena **auto-detects** the project root from the process working directory
+(`.serena/project.yml` or `.git`). Use an explicit path only when debugging or when cwd is not
+the workspace:
 
     serena start-mcp-server --project /absolute/path/to/project
 
-If auto-detection fails at startup, the host agent should call `activate_project` with the IDE workspace path (see [Cursor](030_clients#cursor)).
+If auto-detection fails at startup, the agent can call `manage_project` with the IDE workspace
+path (see [Cursor](030_clients#cursor)).
 
 See [Configuring Your MCP Client](030_clients) for path-free `mcp.json` examples.
-
-(streamable-http)=
-### Streamable HTTP Mode
-
-When using *Streamable HTTP* mode, you control the server lifecycle yourself,
-i.e. you start the server and provide the client with the URL to connect to it.
-
-Simply provide `start-mcp-server` with the `--transport streamable-http` option and optionally provide the desired port
-via the `--port` option.
-For example, to start the server on port 9121, run
-
-    serena start-mcp-server --transport streamable-http --port <port>
-
-and then configure your client to connect to `http://localhost:9121/mcp`.
-
-By default, only connections from localhost are allowed; pass the `--host <listen_address>` option to configure
-the listen address and allow remote connections if needed (but be aware of the security implications of doing so).
-
-**When to use.** Note that Serena is a stateful MCP server, and only one coding project can be active at a time.
-Therefore, starting a single Serena instance and connecting it to multiple clients is only 
-appropriate if all clients will be working on the same project.  
-If you want several agents to work on different projects, making each client/agent start its own server
-in stdio mode is likely the best option.
-See section [The Project Workflow](040_workflow) for more information on how to manage projects in Serena.
-
-The legacy SSE transport is also supported (via `--transport sse` with corresponding /sse endpoint), its use is discouraged.
 
 (mcp-args)=
 ### MCP Server Command-Line Arguments
@@ -95,9 +65,9 @@ to get a list of all available options.
 Some useful options include:
 
   * `--project <path|name>`: optional explicit project; overrides cwd auto-detection.
-  * **Default (no `--project`)**: auto-detect from the server working directory (``.serena/project.yml`` or ``.git``). If nothing is found, the agent can activate via the `activate_project` tool.
+  * **Default (no `--project`)**: auto-detect from the server working directory (`.serena/project.yml` or `.git`).
+    If nothing is found, the agent can activate via the `manage_project` tool.
   * `--project-from-cwd`: deprecated alias for the default behaviour when `--project` is omitted.
-  * `--transport <stdio|streamable-http|sse>`: communication protocol (stdio is the default for IDE clients).
   * `--log-level`, `--trace-lsp-communication`, `--tool-timeout`: override values from [configuration](050_configuration).
 
 ## Other Commands
@@ -119,13 +89,13 @@ Here are some examples of commands you might find useful:
 
 ```bash
 # get help about a sub-command
-serena> tools list --help
+serena tools list --help
 
 # list all available tools
-serena> tools list --all
+serena tools list --all
 
 # get detailed description of a specific tool
-serena> tools description find_symbol
+serena tools description find_symbol
 
 # creating a new Serena project in the current directory 
 serena project create
@@ -162,7 +132,7 @@ with the respective command and options.
     uvx -p 3.13 --from git+https://github.com/oraios/serena serena 
 
 This was previously the main way of running Serena.
-Since this has the downside that every new commit in the repository will trigger a (potentially slow) re-synchronization, an [installation](010_installation) of Serena should usually be preferred.
+Since this has the downside that every new commit in the repository will trigger a (potentially slow) re-synchronisation, an [installation](010_installation) of Serena should usually be preferred.
 If you should experience timeouts when connecting the MCP server, consider switching.  
 If, however, the synchronisation is fast enough for you, this is still a good option.
 

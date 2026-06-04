@@ -1,18 +1,16 @@
 # Connecting Your MCP Client
 
-Serena works with any MCP client that can launch a stdio server or connect to HTTP/SSE.
+Serena works with any MCP client that can launch a stdio server.
 
 (clients-general-instructions)=
 ## General instructions
 
 1. Add a custom MCP server in your client (see the client's documentation).
-2. Configure either:
-   - a **stdio** launch command: `serena start-mcp-server` (no project path required in `mcp.json`), or
-   - an **HTTP/SSE** URL after you start the server manually ([Running the MCP Server](020_running#streamable-http)).
+2. Configure a **stdio** launch command: `serena start-mcp-server` (no project path required in `mcp.json`).
 
 Adjust behaviour via [configuration](050_configuration) and [command-line options](mcp-args).
 
-**Project binding without paths in MCP config.** By default the server auto-detects a project from its working directory at startup. If that fails, the agent should call `activate_project` with the IDE workspace root path (see [Cursor](#cursor)). Optional `--project` remains for explicit overrides.
+**Project binding without paths in MCP config.** By default the server auto-detects a project from its working directory at startup. If that fails, the agent should call `manage_project` (action=activate) with the IDE workspace root path (see [Cursor](#cursor)). Optional `--project` remains for explicit overrides.
 
 **Tool selection.** Prefer tuning `excluded_tools` / `included_optional_tools` in Serena's config rather than disabling tools only in the client UI.
 
@@ -21,7 +19,7 @@ Adjust behaviour via [configuration](050_configuration) and [command-line option
 
 **`serena` not on PATH.** Use the full path to the executable in `command`, or use `uvx` / `uv run` as in the examples below.
 
-**Serena's tools not used.** Some clients under-use external MCP tools. Ask the agent to call `initial_instructions` and use symbolic tools (`find_symbol`, `find_referencing_symbols`, etc.) for navigation and refactors.
+**Serena's tools not used.** Some clients under-use external MCP tools. Ask the agent to call `start_here` and use symbolic tools (`find_symbol`, `find_usages`, etc.) for navigation and refactors.
 
 **Environment variables.** Language servers may need extra env vars (e.g. `DOTNET_ROOT`). Add an `env` object to the MCP server entry if the subprocess does not inherit your shell profile.
 
@@ -66,7 +64,7 @@ Cursor spawns the MCP server from `mcp.json`. **Do not** run `serena start-mcp-s
 **How the workspace is chosen**
 
 - **Startup:** Serena walks up from the MCP subprocess cwd looking for `.serena/project.yml` or `.git`. This works when Cursor launches the server with cwd set to the workspace root (typical for workspace-scoped MCP).
-- **Agent fallback:** If tools report “No active project”, ask the agent to call `activate_project` with the workspace root path from the IDE. The tool registers the project and creates `.serena/project.yml` if needed.
+- **Agent fallback:** If tools report “No active project”, ask the agent to call `manage_project` (action=activate) with the workspace root path from the IDE. The tool registers the project and creates `.serena/project.yml` if needed.
 - **Verify:** Check MCP server logs for `Using project root …` or the warning that auto-detection failed.
 
 One-time on the machine: `serena init`. Optional: `serena project index` in the repo for faster first session.
@@ -87,7 +85,7 @@ claude mcp add serena -- serena start-mcp-server --project "$(pwd)"
 
 Confirm with `/mcp`. If the server starts slowly, increase `MCP_TIMEOUT` (e.g. `export MCP_TIMEOUT=60000`).
 
-At the start of a session, ask the agent to read Serena's `initial_instructions` tool if it does not use symbolic tools automatically.
+At the start of a session, ask the agent to call Serena's `start_here` tool if it does not use symbolic tools automatically.
 
 ## VS Code
 

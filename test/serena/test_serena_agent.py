@@ -894,9 +894,11 @@ class TestSerenaAgent:
 
     @staticmethod
     def _parse_find_declaration_result(result: str) -> list[dict]:
-        """Parse find_declaration tool output (optional prefix/suffix around the JSON list)."""
-        if result.startswith("Found declaration."):
+        """Parse find_definition tool output (optional prefix/suffix around the JSON list)."""
+        # Strip single-result header line added by FindDefinitionTool.
+        if result.startswith("Found definition."):
             result = result.split("\n", 1)[1]
+        # Strip truncation trailer for many-result responses.
         if "\n... and " in result:
             result = result.split("\n", 1)[0]
         return json.loads(result)

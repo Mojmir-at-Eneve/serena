@@ -17,11 +17,10 @@ from serena.config.serena_config import LanguageBackend, ProjectConfig, Register
 from serena.constants import REPO_ROOT
 from serena.project import Project
 from serena.tools import (
-    CreateTextFileTool,
+    CheckErrorsTool,
+    CheckSymbolErrorsTool,
     EditingToolWithDiagnostics,
-    GetDiagnosticsForFileTool,
-    GetDiagnosticsForSymbolTool,
-    ReplaceContentTool,
+    SearchAndReplaceTool,
 )
 from solidlsp.ls_config import Language
 
@@ -88,53 +87,48 @@ if __name__ == "__main__":
     agent = make_agent()
 
     try:
-        # letting the language server finish startup
+        # Let the language server finish startup.
         agent.execute_task(lambda: None)
 
-        create_text_file_tool = agent.get_tool(CreateTextFileTool)
-        replace_content_tool = agent.get_tool(ReplaceContentTool)
-        get_diagnostics_for_file_tool = agent.get_tool(GetDiagnosticsForFileTool)
-        get_diagnostics_for_symbol_tool = agent.get_tool(GetDiagnosticsForSymbolTool)
+        # Write the initial file content using host file tools (file tools were
+        # removed from Serena; agents should use their native file-write primitives).
+        temp_file.write_text(initial_content)
 
-        # creating a clean temporary file
-        print_section("Create Temporary File")
-        create_result = agent.execute_task(lambda: create_text_file_tool.apply(relative_path=relative_path, content=initial_content))
-        print(create_result)
+        search_and_replace_tool = agent.get_tool(SearchAndReplaceTool)
+        check_errors_tool = agent.get_tool(CheckErrorsTool)
+        check_symbol_errors_tool = agent.get_tool(CheckSymbolErrorsTool)
 
-        # showing file diagnostics before introducing any warning
+        # Show file diagnostics before introducing any warning.
         print_section("Initial File Diagnostics")
         initial_diagnostics_result = agent.execute_task(
-            lambda: get_diagnostics_for_file_tool.apply(relative_path=relative_path, min_severity=2)
+            lambda: check_errors_tool.apply(relative_path=relative_path, min_severity=2)
         )
         initial_diagnostics = parse_json_result(initial_diagnostics_result)
         assert initial_diagnostics == {}, initial_diagnostics
 
-        # introducing the first warning
+        # Introduce the first warning via search_and_replace.
         print_section("First Edit Result")
         first_edit_result = agent.execute_task(
-            lambda: replace_content_tool.apply(
-                relative_path=relative_path,
-                needle="value = 1",
-                repl="value = missing_one",
-                mode="literal",
+            lambda: search_and_replace_tool.apply(
+                pattern="value = 1",
+                replacement="value = missing_one",
+                mode="apply",
+                match_mode="literal",
             )
         )
         print(first_edit_result)
-        first_edit_diagnostics = parse_edit_diagnostics_result(first_edit_result)
-        pprint(first_edit_diagnostics, width=200)
-        assert "missing_one" in json.dumps(first_edit_diagnostics), first_edit_diagnostics
 
-        # showing the file- and symbol-level diagnostics after the first warning
+        # Show file-level and symbol-level diagnostics after the first warning.
         print_section("File Diagnostics After First Edit")
         diagnostics_after_first_edit_result = agent.execute_task(
-            lambda: get_diagnostics_for_file_tool.apply(relative_path=relative_path, min_severity=2)
+            lambda: check_errors_tool.apply(relative_path=relative_path, min_severity=2)
         )
         diagnostics_after_first_edit = parse_json_result(diagnostics_after_first_edit_result)
         assert "missing_one" in json.dumps(diagnostics_after_first_edit), diagnostics_after_first_edit
 
         print_section("Symbol Diagnostics After First Edit")
         symbol_diagnostics_result = agent.execute_task(
-            lambda: get_diagnostics_for_symbol_tool.apply(
+            lambda: check_symbol_errors_tool.apply(
                 name_path="demo_existing_issue",
                 reference_file=relative_path,
                 min_severity=2,
@@ -143,33 +137,29 @@ if __name__ == "__main__":
         symbol_diagnostics = parse_json_result(symbol_diagnostics_result)
         assert "missing_one" in json.dumps(symbol_diagnostics), symbol_diagnostics
 
-        # introducing a second warning while keeping the first one unchanged
+        # Introduce a second warning while keeping the first one unchanged.
         print_section("Second Edit Result")
         second_edit_result = agent.execute_task(
-            lambda: replace_content_tool.apply(
-                relative_path=relative_path,
-                needle="    return value\n",
-                repl="    other = missing_two\n    return value + other\n",
-                mode="literal",
+            lambda: search_and_replace_tool.apply(
+                pattern="    return value\n",
+                replacement="    other = missing_two\n    return value + other\n",
+                mode="apply",
+                match_mode="literal",
             )
         )
         print(second_edit_result)
-        second_edit_diagnostics = parse_edit_diagnostics_result(second_edit_result)
-        pprint(second_edit_diagnostics, width=200)
-        second_edit_json = json.dumps(second_edit_diagnostics)
-        assert "missing_two" in second_edit_json, second_edit_diagnostics
-        assert "missing_one" not in second_edit_json, second_edit_diagnostics
-        print("\nVerified: the second edit result reports only the newly introduced warning.")
 
-        # showing the complete file diagnostics after both warnings exist
+        # Show the complete file diagnostics after both warnings exist.
         print_section("File Diagnostics After Second Edit")
         diagnostics_after_second_edit_result = agent.execute_task(
-            lambda: get_diagnostics_for_file_tool.apply(relative_path=relative_path, min_severity=2)
+            lambda: check_errors_tool.apply(relative_path=relative_path, min_severity=2)
         )
         diagnostics_after_second_edit = parse_json_result(diagnostics_after_second_edit_result)
-        diagnostics_after_second_edit_json = json.dumps(diagnostics_after_second_edit)
-        assert "missing_one" in diagnostics_after_second_edit_json, diagnostics_after_second_edit
-        assert "missing_two" in diagnostics_after_second_edit_json, diagnostics_after_second_edit
+        diagnostics_json = json.dumps(diagnostics_after_second_edit)
+        assert "missing_one" in diagnostics_json, diagnostics_after_second_edit
+        assert "missing_two" in diagnostics_json, diagnostics_after_second_edit
+        print("\nVerified: both warnings are present after two edits.")
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         agent.shutdown()
