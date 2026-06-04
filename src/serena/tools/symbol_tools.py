@@ -145,7 +145,7 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         include_kinds: list[int] = [],  # noqa: B006
         exclude_kinds: list[int] = [],  # noqa: B006
         substring_matching: bool = False,
-        max_matches: int = -1,
+        max_matches: int = DEFAULT_MAX_RESULTS,
         max_answer_chars: int = -1,
     ) -> str:
         """
@@ -180,8 +180,9 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         :param exclude_kinds: (optional) list of LSP symbol kinds (integers) to exclude.
         :param substring_matching: If True, use substring matching for the last element of the pattern, such that
             "Foo/get" would match "Foo/getValue" and "Foo/getData".
-        :param max_matches: maximum number of permitted matches. If exceeded, a shortened result is returned
-             which allows refining the search. -1 (default) means no limit. Set to 1 if you search for a single symbol.
+        :param max_matches: maximum number of symbol matches to return. Defaults to 12.
+            Pass -1 for unlimited results (use with caution on large codebases). If exceeded, a shortened result
+            is returned which allows refining the search. Set to 1 if you search for a single symbol.
         :param max_answer_chars: max result length; -1 for default
         :return: symbols (with locations) matching the name.
         """
@@ -234,7 +235,10 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
             return f"Shortened result:\n{self._to_json(relative_path_to_name_paths)}"
 
         if 0 < max_matches < n_matches:
-            return f"Matched {n_matches}>{max_matches=} symbols.\n" + create_short_result_relative_path_to_name_paths()
+            return (
+                f"Showing {max_matches} of {n_matches} total matches (pass max_matches=-1 for all).\n"
+                + create_short_result_relative_path_to_name_paths()
+            )
 
         symbol_dicts = []
         for proj_id, s, _ in symbols:
