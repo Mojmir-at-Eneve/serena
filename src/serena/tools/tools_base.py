@@ -1,6 +1,6 @@
 import inspect
 import json
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import cached_property
@@ -34,6 +34,29 @@ SUCCESS_RESULT = "OK"
 # Default cap for tools that return multiple results (declarations, symbols, etc.).
 # Keeps responses manageable; pass -1 or a higher value explicitly for unlimited.
 DEFAULT_MAX_RESULTS = 12
+
+
+class ToolResult(ABC):
+    """
+    Structured result returned by a tool's apply() method.
+
+    Provides two rendering paths:
+    - to_mcp_string(): serialised output for the MCP wire (JSON or plain text, same
+      format the MCP client receives).
+    - to_cli_text(): agent-friendly plain text for the CLI surface — no JSON, no
+      special symbols, nicely structured sections.
+
+    Tool subclasses that return a ToolResult gain dual-rendering for free; the
+    apply_ex() plumbing calls to_mcp_string() when producing the final MCP response.
+    """
+
+    @abstractmethod
+    def to_mcp_string(self) -> str:
+        """Serialise the result for the MCP wire."""
+
+    @abstractmethod
+    def to_cli_text(self) -> str:
+        """Format the result as structured plain text for the CLI."""
 
 
 class Component(ABC):
@@ -142,9 +165,13 @@ class ToolMarkerBeta(ToolMarker):
 
 
 class ApplyMethodProtocol(Protocol):
-    """Callable protocol for the apply method of a tool."""
+    """Callable protocol for the apply method of a tool.
 
-    def __call__(self, *args: Any, **kwargs: Any) -> str:
+    Tools may return either a plain ``str`` (legacy) or a ``ToolResult`` (new-style).
+    ``apply_ex`` normalises both to ``str`` before returning to the MCP layer.
+    """
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "str | ToolResult":
         pass
 
 
@@ -376,7 +403,8 @@ class Tool(Component):
                 if self._is_session_aware:
                     apply_kwargs["session_id"] = session_id
 
-                # apply the actual tool
+                # apply the actual tool; apply() may return a ToolResult (new-style)
+                # or a plain str (legacy style) — both are handled below.
                 try:
                     result = apply_fn(**apply_kwargs)
                 except SolidLSPException as e:
@@ -404,6 +432,10 @@ class Tool(Component):
                 msg = f"Error executing tool: {e.__class__.__name__} - {e}"
                 log.error(f"Error executing tool: {e}", exc_info=e)
                 result = msg
+
+            # Normalise ToolResult → str for the MCP wire.
+            if isinstance(result, ToolResult):
+                result = result.to_mcp_string()
 
             if log_call:
                 log.info(f"Result: {result}")
