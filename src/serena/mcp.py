@@ -43,7 +43,7 @@ class SerenaMCPRequestContext:
 class SerenaMCPFactory:
     def __init__(
         self,
-        transport: Literal["stdio", "sse", "streamable-http"],
+        transport: Literal["stdio"] = "stdio",
         project: str | None = None,
         memory_log_handler: MemoryLogHandler | None = None,
     ):
@@ -122,8 +122,6 @@ class SerenaMCPFactory:
 
     def create_mcp_server(
         self,
-        host: str = "127.0.0.1",
-        port: int = 8000,
         log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = None,
         trace_lsp_communication: bool | None = None,
         tool_timeout: float | None = None,
@@ -150,8 +148,6 @@ class SerenaMCPFactory:
             name="Serena",
             lifespan=self.server_lifespan,
             website_url="https://oraios.github.io/serena",
-            host=host,
-            port=port,
             instructions=instructions,
         )
 
@@ -162,12 +158,9 @@ class SerenaMCPFactory:
         try:
             yield
         finally:
-            if self.transport == "stdio":
-                log.info("MCP server shutting down")
-                if self.agent is not None:
-                    self.agent.on_shutdown()
-            else:
-                log.info("Client disconnected")
+            log.info("MCP server shutting down")
+            if self.agent is not None:
+                self.agent.on_shutdown()
 
     def _get_initial_instructions(self) -> str:
         assert self.agent is not None

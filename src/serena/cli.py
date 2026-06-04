@@ -129,17 +129,8 @@ class TopLevelCommands(AutoRegisteringGroup):
         super().__init__(name="serena", help="Serena LSP MCP toolbox for coding agents.")
 
     @staticmethod
-    @click.command("start-mcp-server", help="Starts the Serena MCP server.", context_settings={"max_content_width": _MAX_CONTENT_WIDTH})
+    @click.command("start-mcp-server", help="Starts the Serena MCP server (stdio transport).", context_settings={"max_content_width": _MAX_CONTENT_WIDTH})
     @click.option("--project", "project", type=click.Path(), default=None, help="Path or name of project to activate at startup.")
-    @click.option(
-        "--transport",
-        type=click.Choice(["stdio", "sse", "streamable-http"]),
-        default="stdio",
-        show_default=True,
-        help="Transport protocol.",
-    )
-    @click.option("--host", type=str, default="127.0.0.1", show_default=True, help="Listen address (non-stdio transports).")
-    @click.option("--port", type=int, default=8000, show_default=True, help="Listen port (non-stdio transports).")
     @click.option(
         "--log-level",
         type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
@@ -156,9 +147,6 @@ class TopLevelCommands(AutoRegisteringGroup):
     )
     def start_mcp_server(
         project: str | None,
-        transport: Literal["stdio", "sse", "streamable-http"],
-        host: str,
-        port: int,
         log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None,
         trace_lsp_communication: bool | None,
         tool_timeout: float | None,
@@ -184,21 +172,20 @@ class TopLevelCommands(AutoRegisteringGroup):
         project = resolve_project_root_for_startup(project)
         if project is None:
             log.warning(
-                "No project root auto-detected from cwd %s; the agent should call activate_project with the workspace path",
+                "No project root auto-detected from cwd %s; the agent should call start_here or manage_project with the workspace path",
                 os.getcwd(),
             )
         else:
             log.info("Using project root %s (cwd %s)", project, os.getcwd())
 
-        factory = SerenaMCPFactory(transport=transport, project=project, memory_log_handler=memory_log_handler)
+        # SSE and streamable-http transports removed: stdio is the only supported transport.
+        factory = SerenaMCPFactory(transport="stdio", project=project, memory_log_handler=memory_log_handler)
         server = factory.create_mcp_server(
-            host=host,
-            port=port,
             log_level=log_level,
             trace_lsp_communication=trace_lsp_communication,
             tool_timeout=tool_timeout,
         )
-        server.run(transport=transport)
+        server.run(transport="stdio")
 
     @staticmethod
     @click.command("init", help="Create ~/.serena/serena_config.yml from the template.")
