@@ -1,9 +1,32 @@
-import collections
-import json
+"""
+Serena CLI — agent-facing command-line interface.
+
+Every MCP tool is exposed as a subcommand so agents with terminal access can
+call Serena directly without an MCP client.  Output is structured plain text
+(no JSON blobs, no special symbols) — readable both by agents and humans.
+
+Usage:
+  serena [--project PATH] COMMAND [OPTIONS] [ARGS]
+
+The --project option is global: pass an absolute path or a registered project
+name.  If omitted, Serena auto-detects the project from the current working
+directory (.serena/project.yml or .git).
+
+Tool subcommands mirror the MCP surface exactly:
+  start-here, manage-project, search-and-replace,
+  run-command, run-project-command, manage-project-commands,
+  symbols-overview, find-symbol, find-usages, find-implementations,
+  find-definition, check-errors, check-symbol-errors,
+  rewrite-symbol, inject-code, rename-symbol, delete-symbol
+
+Setup subcommands (human / CI):
+  init, project create|index, start-mcp-server
+"""
+
 import os
-import subprocess
 import sys
 import time
+import collections
 from collections.abc import Iterator
 from logging import Logger
 from pathlib import Path
@@ -27,6 +50,11 @@ from solidlsp.util.subprocess_util import subprocess_kwargs
 log = logging.getLogger(__name__)
 _MAX_CONTENT_WIDTH = 200
 
+
+# ---------------------------------------------------------------------------
+# Project root detection helpers (used by tools and setup commands alike)
+# ---------------------------------------------------------------------------
+
 def find_project_root(root: str | Path | None = None) -> str | None:
     """Find project root by walking up from CWD.
 
@@ -40,39 +68,32 @@ def find_project_root(root: str | Path | None = None) -> str | None:
     boundary = Path(root).resolve() if root is not None else None
 
     def ancestors() -> Iterator[Path]:
-        """Yield current directory and ancestors up to boundary."""
         yield current
         for parent in current.parents:
             yield parent
             if boundary is not None and parent == boundary:
                 return
 
-    # First pass: look for .serena
     for directory in ancestors():
         if (directory / ".serena" / "project.yml").is_file():
             return str(directory)
 
-    # Second pass: look for .git
     for directory in ancestors():
-        if (directory / ".git").exists():  # .git can be file (worktree) or dir
+        if (directory / ".git").exists():
             return str(directory)
 
     return None
 
 
 def resolve_project_root_for_startup(explicit_project: str | None) -> str | None:
-    """Resolve the project to activate when the MCP server starts.
-
-    Uses an explicit ``--project`` when provided; otherwise auto-detects from the
-    server process working directory (``.serena/project.yml`` or ``.git``).
-    """
+    """Resolve the project to activate when the MCP server starts."""
     if explicit_project is not None:
         return explicit_project
     return find_project_root()
 
 
 def resolve_project_for_activation(project: str | None) -> str:
-    """Resolve the project argument for :class:`ActivateProjectTool`.
+    """Resolve the project argument for ManageProjectTool / StartHereTool.
 
     Empty, whitespace-only, or ``"."`` means detect from the server cwd.
     """
@@ -82,34 +103,479 @@ def resolve_project_for_activation(project: str | None) -> str:
     if detected is None:
         raise ValueError(
             "Could not detect a project root from the server working directory. "
-            "Call activate_project with the IDE workspace root path (absolute path to the project directory)."
+            "Call manage_project with the IDE workspace root path (absolute path to the project directory)."
         )
     return detected
 
 
-def _open_in_editor(path: str) -> None:
-    """Open the given file in the system's default editor or viewer."""
-    editor = os.environ.get("EDITOR")
-    run_kwargs = subprocess_kwargs()
+# ---------------------------------------------------------------------------
+# Agent bootstrap helper
+# ---------------------------------------------------------------------------
+
+def _make_agent(project_path: str | None) -> "SerenaAgent":  # type: ignore[name-defined]
+    """Create a SerenaAgent for CLI use, optionally pre-activating a project."""
+    from serena.agent import SerenaAgent
+
+    serena_config = SerenaConfig.from_config_file()
+    agent = SerenaAgent(project=project_path, serena_config=serena_config)
+    return agent
+
+
+def _run_tool(agent: "SerenaAgent", tool_cls: type, **kwargs: Any) -> str:  # type: ignore[name-defined]
+    """Instantiate a tool from agent and call apply_ex(), returning the result string."""
+    tool = agent.get_tool(tool_cls)
+    result = tool.apply_ex(log_call=False, catch_exceptions=False, **kwargs)
+    return result
+
+
+def _run_tool_cli(agent: "SerenaAgent", tool_cls: type, **kwargs: Any) -> None:  # type: ignore[name-defined]
+    """Run a tool, rendering CLI text if the result is a ToolResult, else print as-is."""
+    from serena.tools.tools_base import ToolResult
+
+    tool = agent.get_tool(tool_cls)
     try:
-        if editor:
-            subprocess.run([editor, path], check=False, **run_kwargs)
-        elif sys.platform.startswith("win"):
-            try:
-                os.startfile(path)
-            except OSError:
-                subprocess.run(["notepad.exe", path], check=False, **run_kwargs)
-        elif sys.platform == "darwin":
-            subprocess.run(["open", path], check=False, **run_kwargs)
-        else:
-            subprocess.run(["xdg-open", path], check=False, **run_kwargs)
-    except Exception as e:
-        print(f"Failed to open {path}: {e}")
+        raw = tool.apply_ex(log_call=False, catch_exceptions=False, **kwargs)
+    except Exception as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    # apply_ex normalises ToolResult -> str via to_mcp_string(); but for CLI we want
+    # to_cli_text(). We call apply() directly here so we can check the raw return.
+    try:
+        raw_result = tool.apply(**kwargs)  # type: ignore[call-arg]
+    except Exception as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if isinstance(raw_result, ToolResult):
+        click.echo(raw_result.to_cli_text())
+    else:
+        click.echo(str(raw_result))
 
 
-class ProjectType(click.ParamType):
-    """ParamType allowing either a project name or a path to a project directory."""
+# ---------------------------------------------------------------------------
+# Global --project option passed via Click context
+# ---------------------------------------------------------------------------
 
+class _ProjectOption:
+    """Holds the resolved project path for the current invocation."""
+
+    def __init__(self, project: str | None) -> None:
+        self.project = project
+
+
+pass_project = click.make_pass_decorator(_ProjectOption, ensure=True)
+
+
+# ---------------------------------------------------------------------------
+# Top-level group
+# ---------------------------------------------------------------------------
+
+@click.group(context_settings={"max_content_width": _MAX_CONTENT_WIDTH})
+@click.option(
+    "--project",
+    "project_path",
+    type=click.Path(),
+    default=None,
+    help="Project root path or registered name. Auto-detected from cwd if omitted.",
+)
+@click.pass_context
+def top_level(ctx: click.Context, project_path: str | None) -> None:
+    """Serena LSP toolbox for coding agents.
+
+    Every MCP tool is available as a subcommand. Output is structured plain text.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["project"] = project_path
+
+
+# ---------------------------------------------------------------------------
+# Helper: create agent lazily from context
+# ---------------------------------------------------------------------------
+
+def _agent_from_ctx(ctx: click.Context) -> "SerenaAgent":  # type: ignore[name-defined]
+    project_path: str | None = ctx.obj.get("project")
+    resolved = resolve_project_root_for_startup(project_path)
+    return _make_agent(resolved)
+
+
+# ---------------------------------------------------------------------------
+# Tool subcommands
+# ---------------------------------------------------------------------------
+
+@top_level.command("start-here")
+@click.option("--project", "project", default="", help="Project path or registered name to activate.")
+@click.pass_context
+def cmd_start_here(ctx: click.Context, project: str) -> None:
+    """Initialize the session: auto-detect project, return instructions + workspace status."""
+    from serena.tools.workflow_tools import StartHereTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, StartHereTool, project=project)
+
+
+@top_level.command("manage-project")
+@click.option(
+    "--action",
+    type=click.Choice(["activate", "remove"]),
+    default="activate",
+    show_default=True,
+    help="Activate a project or remove it from configuration.",
+)
+@click.option("--project", "project", default="", help="Project path or registered name.")
+@click.pass_context
+def cmd_manage_project(ctx: click.Context, action: str, project: str) -> None:
+    """Activate or remove a Serena project."""
+    from serena.tools.config_tools import ManageProjectTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, ManageProjectTool, action=action, project=project)
+
+
+@top_level.command("search-and-replace")
+@click.argument("pattern")
+@click.option("--replace", "replacement", default=None, help="Replacement text. Omit for search-only.")
+@click.option(
+    "--mode",
+    type=click.Choice(["literal", "regex"]),
+    default="literal",
+    show_default=True,
+    help="Match mode.",
+)
+@click.option("--path", "relative_path", default="", help="Restrict to this file or directory.")
+@click.option("--include", default="", help="Glob pattern to include files (e.g. 'src/**/*.py').")
+@click.option("--exclude", default="", help="Glob pattern to exclude files.")
+@click.option("--dry-run", is_flag=True, default=False, help="Preview changes without modifying files.")
+@click.option("--context", "context_lines", type=int, default=2, show_default=True, help="Context lines around each match.")
+@click.option("--max-preview", "max_preview_files", type=int, default=3, show_default=True, help="Max files shown in dry-run preview.")
+@click.pass_context
+def cmd_search_and_replace(
+    ctx: click.Context,
+    pattern: str,
+    replacement: str | None,
+    mode: str,
+    relative_path: str,
+    include: str,
+    exclude: str,
+    dry_run: bool,
+    context_lines: int,
+    max_preview_files: int,
+) -> None:
+    """Search for a pattern (and optionally replace it) across project files."""
+    from serena.tools.file_tools import SearchAndReplaceTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(
+        agent,
+        SearchAndReplaceTool,
+        pattern=pattern,
+        replacement=replacement,
+        mode=mode,
+        relative_path=relative_path,
+        include=include,
+        exclude=exclude,
+        dry_run=dry_run,
+        context_lines=context_lines,
+        max_preview_files=max_preview_files,
+    )
+
+
+@top_level.command("run-command")
+@click.argument("command")
+@click.option("--cwd", default=None, help="Working directory (default: project root).")
+@click.option("--no-stderr", "capture_stderr", is_flag=True, default=True, flag_value=False, help="Omit stderr from output.")
+@click.pass_context
+def cmd_run_command(ctx: click.Context, command: str, cwd: str | None, capture_stderr: bool) -> None:
+    """Execute a shell command in the project root."""
+    from serena.tools.cmd_tools import RunCommandTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, RunCommandTool, command=command, cwd=cwd, capture_stderr=capture_stderr)
+
+
+@top_level.command("run-project-command")
+@click.argument("name")
+@click.option("--no-stderr", "capture_stderr", is_flag=True, default=True, flag_value=False, help="Omit stderr from output.")
+@click.pass_context
+def cmd_run_project_command(ctx: click.Context, name: str, capture_stderr: bool) -> None:
+    """Run a named project command (e.g. test, lint, build)."""
+    from serena.tools.cmd_tools import RunProjectCommandTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, RunProjectCommandTool, name=name, capture_stderr=capture_stderr)
+
+
+@top_level.command("manage-project-commands")
+@click.option(
+    "--action",
+    type=click.Choice(["add", "update", "remove", "list"]),
+    default="list",
+    show_default=True,
+    help="Action to perform.",
+)
+@click.option("--name", default="", help="Command name (e.g. 'test', 'lint').")
+@click.option("--command", "command_str", default="", help="Shell command to save.")
+@click.option("--description", default="", help="Human-readable description.")
+@click.option("--example", "examples", multiple=True, help="Example usage (can be repeated).")
+@click.pass_context
+def cmd_manage_project_commands(
+    ctx: click.Context,
+    action: str,
+    name: str,
+    command_str: str,
+    description: str,
+    examples: tuple[str, ...],
+) -> None:
+    """Add, update, remove, or list named project commands stored in project.yml."""
+    from serena.tools.cmd_tools import ManageProjectCommandsTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(
+        agent,
+        ManageProjectCommandsTool,
+        action=action,
+        name=name,
+        command=command_str,
+        description=description,
+        examples=list(examples) if examples else None,
+    )
+
+
+@top_level.command("symbols-overview")
+@click.argument("file")
+@click.option("--depth", type=int, default=1, show_default=True, help="Child depth (1 = immediate children).")
+@click.pass_context
+def cmd_symbols_overview(ctx: click.Context, file: str, depth: int) -> None:
+    """Show the top-level symbol tree of a file."""
+    from serena.tools.symbol_tools import SymbolsOverviewTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, SymbolsOverviewTool, relative_path=file, depth=depth)
+
+
+@top_level.command("find-symbol")
+@click.argument("pattern")
+@click.option("--file", "relative_path", default="", help="Restrict to this file or directory.")
+@click.option("--body", "include_body", is_flag=True, default=False, help="Include symbol body.")
+@click.option("--info", "include_info", is_flag=True, default=False, help="Include hover-style info.")
+@click.option("--depth", type=int, default=0, show_default=True, help="Child depth.")
+@click.option("--max", "max_matches", type=int, default=12, show_default=True, help="Max matches.")
+@click.pass_context
+def cmd_find_symbol(
+    ctx: click.Context,
+    pattern: str,
+    relative_path: str,
+    include_body: bool,
+    include_info: bool,
+    depth: int,
+    max_matches: int,
+) -> None:
+    """Find symbols by name pattern (globally or within a file/directory)."""
+    from serena.tools.symbol_tools import FindSymbolTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(
+        agent,
+        FindSymbolTool,
+        name_path_pattern=pattern,
+        relative_path=relative_path,
+        include_body=include_body,
+        include_info=include_info,
+        depth=depth,
+        max_matches=max_matches,
+    )
+
+
+@top_level.command("find-usages")
+@click.argument("name_path")
+@click.option("--file", "relative_path", required=True, help="File containing the symbol.")
+@click.pass_context
+def cmd_find_usages(ctx: click.Context, name_path: str, relative_path: str) -> None:
+    """Find all usages (references) of a symbol across the codebase."""
+    from serena.tools.symbol_tools import FindUsagesTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, FindUsagesTool, name_path=name_path, relative_path=relative_path)
+
+
+@top_level.command("find-implementations")
+@click.argument("name_path")
+@click.option("--file", "relative_path", required=True, help="File containing the abstract symbol.")
+@click.option("--info", "include_info", is_flag=True, default=False, help="Include hover-style info.")
+@click.pass_context
+def cmd_find_implementations(ctx: click.Context, name_path: str, relative_path: str, include_info: bool) -> None:
+    """Find concrete implementations of an abstract symbol (interface/abstract class)."""
+    from serena.tools.symbol_tools import FindImplementationsTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, FindImplementationsTool, name_path=name_path, relative_path=relative_path, include_info=include_info)
+
+
+@top_level.command("find-definition")
+@click.option("--file", "relative_path", required=True, help="File containing the usage site.")
+@click.option("--regex", required=True, help="Regex with one capture group isolating the symbol at its usage.")
+@click.option("--body", "include_body", is_flag=True, default=False, help="Include the definition body.")
+@click.option("--info", "include_info", is_flag=True, default=False, help="Include hover-style info.")
+@click.pass_context
+def cmd_find_definition(ctx: click.Context, relative_path: str, regex: str, include_body: bool, include_info: bool) -> None:
+    """Find where a symbol is defined given a usage site in a file."""
+    from serena.tools.symbol_tools import FindDefinitionTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, FindDefinitionTool, relative_path=relative_path, regex=regex, include_body=include_body, include_info=include_info)
+
+
+@top_level.command("check-errors")
+@click.argument("file")
+@click.option("--start-line", type=int, default=0, show_default=True, help="First 0-based line to include.")
+@click.option("--end-line", type=int, default=-1, show_default=True, help="Last 0-based line (-1 = end of file).")
+@click.option("--min-severity", type=int, default=4, show_default=True, help="Min LSP severity (1=Error..4=Hint).")
+@click.pass_context
+def cmd_check_errors(ctx: click.Context, file: str, start_line: int, end_line: int, min_severity: int) -> None:
+    """Get LSP diagnostics (errors, warnings, hints) for a file."""
+    from serena.tools.symbol_tools import CheckErrorsTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, CheckErrorsTool, relative_path=file, start_line=start_line, end_line=end_line, min_severity=min_severity)
+
+
+@top_level.command("check-symbol-errors")
+@click.argument("name_path")
+@click.option("--file", "reference_file", default="", help="File to disambiguate the symbol.")
+@click.option("--check-usages", is_flag=True, default=False, help="Also check diagnostics for symbols that use this one.")
+@click.pass_context
+def cmd_check_symbol_errors(ctx: click.Context, name_path: str, reference_file: str, check_usages: bool) -> None:
+    """Get LSP diagnostics for a specific symbol (optionally including its usages)."""
+    from serena.tools.symbol_tools import CheckSymbolErrorsTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, CheckSymbolErrorsTool, name_path=name_path, reference_file=reference_file, check_usages=check_usages)
+
+
+@top_level.command("rewrite-symbol")
+@click.argument("name_path")
+@click.option("--file", "relative_path", required=True, help="File containing the symbol.")
+@click.option("--body", required=True, help="Complete new symbol definition including signature.")
+@click.pass_context
+def cmd_rewrite_symbol(ctx: click.Context, name_path: str, relative_path: str, body: str) -> None:
+    """Replace a symbol's full implementation with new code."""
+    from serena.tools.symbol_tools import RewriteSymbolTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, RewriteSymbolTool, name_path=name_path, relative_path=relative_path, body=body)
+
+
+@top_level.command("inject-code")
+@click.argument("name_path")
+@click.option("--file", "relative_path", required=True, help="File containing the anchor symbol.")
+@click.option(
+    "--position",
+    type=click.Choice(["before", "after"]),
+    required=True,
+    help="Insert before or after the symbol.",
+)
+@click.option("--body", required=True, help="Code to insert.")
+@click.pass_context
+def cmd_inject_code(ctx: click.Context, name_path: str, relative_path: str, position: str, body: str) -> None:
+    """Insert code immediately before or after a symbol's definition."""
+    from serena.tools.symbol_tools import InjectCodeTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, InjectCodeTool, name_path=name_path, relative_path=relative_path, position=position, body=body)
+
+
+@top_level.command("rename-symbol")
+@click.argument("name_path")
+@click.option("--file", "relative_path", required=True, help="File containing the symbol.")
+@click.option("--new-name", required=True, help="New name for the symbol.")
+@click.pass_context
+def cmd_rename_symbol(ctx: click.Context, name_path: str, relative_path: str, new_name: str) -> None:
+    """Rename a symbol throughout the codebase using language server refactoring."""
+    from serena.tools.symbol_tools import RenameSymbolTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, RenameSymbolTool, name_path=name_path, relative_path=relative_path, new_name=new_name)
+
+
+@top_level.command("delete-symbol")
+@click.argument("name_path")
+@click.option("--file", "relative_path", required=True, help="File containing the symbol.")
+@click.pass_context
+def cmd_delete_symbol(ctx: click.Context, name_path: str, relative_path: str) -> None:
+    """Delete a symbol if it has no references (safe delete)."""
+    from serena.tools.symbol_tools import DeleteSymbolTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(agent, DeleteSymbolTool, name_path=name_path, relative_path=relative_path)
+
+
+# ---------------------------------------------------------------------------
+# Setup subcommands
+# ---------------------------------------------------------------------------
+
+@top_level.command("init")
+def cmd_init() -> None:
+    """Create ~/.serena/serena_config.yml from the template."""
+    click.echo(f"Serena version: {serena_version()}")
+    serena_config = SerenaConfig.from_config_file()
+    serena_config.save()
+    click.echo(f"Configuration file: {serena_config.config_file_path}")
+
+
+@top_level.command("start-mcp-server")
+@click.option("--project", "project", type=click.Path(), default=None, help="Path or name of project to activate at startup.")
+@click.option(
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    default=None,
+    help="Override log level in config.",
+)
+@click.option("--trace-lsp-communication", type=bool, is_flag=False, default=None, help="Whether to trace LSP communication.")
+@click.option("--tool-timeout", type=float, default=None, help="Override tool execution timeout in config.")
+def cmd_start_mcp_server(
+    project: str | None,
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None,
+    trace_lsp_communication: bool | None,
+    tool_timeout: float | None,
+) -> None:
+    """Start the Serena MCP server (stdio transport)."""
+    from serena.mcp import SerenaMCPFactory
+
+    Logger.root.setLevel(logging.INFO)
+    formatter = logging.Formatter(SERENA_LOG_FORMAT)
+    memory_log_handler = MemoryLogHandler()
+    Logger.root.addHandler(memory_log_handler)
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.formatter = formatter
+    Logger.root.addHandler(stderr_handler)
+    log_path = SerenaPaths().get_next_log_file_path("mcp")
+    file_handler = logging.FileHandler(log_path, mode="w")
+    file_handler.formatter = formatter
+    Logger.root.addHandler(file_handler)
+
+    project = resolve_project_root_for_startup(project)
+    if project is None:
+        log.warning(
+            "No project root auto-detected from cwd %s; call start_here or manage_project with the workspace path",
+            os.getcwd(),
+        )
+    else:
+        log.info("Using project root %s (cwd %s)", project, os.getcwd())
+
+    factory = SerenaMCPFactory(transport="stdio", project=project, memory_log_handler=memory_log_handler)
+    server = factory.create_mcp_server(
+        log_level=log_level,
+        trace_lsp_communication=trace_lsp_communication,
+        tool_timeout=tool_timeout,
+    )
+    server.run(transport="stdio")
+
+
+# ---------------------------------------------------------------------------
+# Project setup subgroup
+# ---------------------------------------------------------------------------
+
+class _ProjectType(click.ParamType):
     name = "[PROJECT_NAME|PROJECT_PATH]"
 
     def convert(self, value: str, param: Any, ctx: Any) -> str:
@@ -119,524 +585,137 @@ class ProjectType(click.ParamType):
         return value
 
 
-PROJECT_TYPE = ProjectType()
+_PROJECT_TYPE = _ProjectType()
 
 
-class TopLevelCommands(AutoRegisteringGroup):
-    """Top-level Serena CLI commands."""
-
-    def __init__(self) -> None:
-        super().__init__(name="serena", help="Serena LSP MCP toolbox for coding agents.")
-
-    @staticmethod
-    @click.command("start-mcp-server", help="Starts the Serena MCP server (stdio transport).", context_settings={"max_content_width": _MAX_CONTENT_WIDTH})
-    @click.option("--project", "project", type=click.Path(), default=None, help="Path or name of project to activate at startup.")
-    @click.option(
-        "--log-level",
-        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
-        default=None,
-        help="Override log level in config.",
-    )
-    @click.option("--trace-lsp-communication", type=bool, is_flag=False, default=None, help="Whether to trace LSP communication.")
-    @click.option("--tool-timeout", type=float, default=None, help="Override tool execution timeout in config.")
-    @click.option(
-        "--project-from-cwd",
-        is_flag=True,
-        default=False,
-        help="Deprecated alias: cwd auto-detection is the default when --project is omitted.",
-    )
-    def start_mcp_server(
-        project: str | None,
-        log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None,
-        trace_lsp_communication: bool | None,
-        tool_timeout: float | None,
-        project_from_cwd: bool,
-    ) -> None:
-        from serena.mcp import SerenaMCPFactory
-
-        Logger.root.setLevel(logging.INFO)
-        formatter = logging.Formatter(SERENA_LOG_FORMAT)
-        memory_log_handler = MemoryLogHandler()
-        Logger.root.addHandler(memory_log_handler)
-        stderr_handler = logging.StreamHandler(stream=sys.stderr)
-        stderr_handler.formatter = formatter
-        Logger.root.addHandler(stderr_handler)
-        log_path = SerenaPaths().get_next_log_file_path("mcp")
-        file_handler = logging.FileHandler(log_path, mode="w")
-        file_handler.formatter = formatter
-        Logger.root.addHandler(file_handler)
-
-        if project_from_cwd and project is not None:
-            raise click.UsageError("--project-from-cwd cannot be used with --project")
-
-        project = resolve_project_root_for_startup(project)
-        if project is None:
-            log.warning(
-                "No project root auto-detected from cwd %s; the agent should call start_here or manage_project with the workspace path",
-                os.getcwd(),
-            )
-        else:
-            log.info("Using project root %s (cwd %s)", project, os.getcwd())
-
-        # SSE and streamable-http transports removed: stdio is the only supported transport.
-        factory = SerenaMCPFactory(transport="stdio", project=project, memory_log_handler=memory_log_handler)
-        server = factory.create_mcp_server(
-            log_level=log_level,
-            trace_lsp_communication=trace_lsp_communication,
-            tool_timeout=tool_timeout,
-        )
-        server.run(transport="stdio")
-
-    @staticmethod
-    @click.command("init", help="Create ~/.serena/serena_config.yml from the template.")
-    def init() -> None:
-        click.echo(f"Serena version: {serena_version()}")
-        serena_config = SerenaConfig.from_config_file()
-        serena_config.save()
-        click.echo(f"Configuration file: {serena_config.config_file_path}")
-
-class SerenaConfigCommands(AutoRegisteringGroup):
-    """Group for 'config' subcommands."""
-
-    def __init__(self) -> None:
-        super().__init__(name="config", help="Manage Serena configuration.")
-
-    @staticmethod
-    @click.command(
-        "edit",
-        help="Edit serena_config.yml in your default editor. Will create a config file from the template if no config is found.",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    def edit() -> None:
-        serena_config = SerenaConfig.from_config_file()
-        assert serena_config.config_file_path is not None
-        _open_in_editor(serena_config.config_file_path)
+@top_level.group("project")
+def project_group() -> None:
+    """Manage Serena project configurations."""
 
 
-class ProjectCommands(AutoRegisteringGroup):
-    """Group for 'project' subcommands."""
+@project_group.command("create")
+@click.argument("project_path", type=click.Path(exists=True, file_okay=False), default=os.getcwd())
+@click.option("--name", type=str, default=None, help="Project name; defaults to directory name.")
+@click.option("--language", type=str, multiple=True, help="Language(s) to configure. Can be repeated.")
+@click.option("--index", is_flag=True, help="Index the project after creation.")
+@click.option(
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    default="WARNING",
+    help="Log level for indexing (only if --index is set).",
+)
+@click.option("--timeout", type=float, default=10, help="Per-file indexing timeout (only if --index is set).")
+def project_create(project_path: str, name: str | None, language: tuple[str, ...], index: bool, log_level: str, timeout: float) -> None:
+    """Create a new Serena project configuration."""
+    try:
+        registered_project = _create_project(project_path, name, language)
+        if index:
+            click.echo("Indexing project...")
+            _index_project(registered_project, log_level, timeout=timeout)
+    except FileExistsError as e:
+        raise click.ClickException(f"Project already exists: {e}\nUse 'serena project index' to index an existing project.")
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
-    def __init__(self) -> None:
-        super().__init__(
-            name="project", help="Manage Serena projects. You can run `project <command> --help` for more info on each command."
-        )
 
-    @staticmethod
-    def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> RegisteredProject:
-        """
-        Helper method to create a project configuration file.
-
-        :param project_path: Path to the project directory
-        :param name: Optional project name (defaults to directory name if not specified)
-        :param language: Tuple of language names
-        :raises FileExistsError: If project.yml already exists
-        :raises ValueError: If an unsupported language is specified
-        :return: the RegisteredProject instance
-        """
-        project_root = Path(project_path).resolve()
-        serena_config = SerenaConfig.from_config_file()
-        yml_path = serena_config.get_project_yml_location(str(project_root))
-        if os.path.exists(yml_path):
-            raise FileExistsError(f"Project file {yml_path} already exists.")
-
-        languages: list[Language] = []
-        if language:
-            for lang in language:
-                try:
-                    languages.append(Language(lang.lower()))
-                except ValueError:
-                    all_langs = [l.value for l in Language]
-                    raise ValueError(f"Unknown language '{lang}'. Supported: {all_langs}")
-
-        generated_conf = ProjectConfig.autogenerate(
-            project_root=project_path,
-            serena_config=serena_config,
-            project_name=name,
-            languages=languages if languages else None,
-            interactive=True,
-        )
-        languages_str = ", ".join([lang.value for lang in generated_conf.languages]) if generated_conf.languages else "N/A"
-        click.echo(f"Generated project with languages {{{languages_str}}} at {yml_path}.")
-        registered_project = serena_config.get_registered_project(str(project_root))
-        if registered_project is None:
-            registered_project = RegisteredProject(str(project_root), generated_conf)
-            serena_config.add_registered_project(registered_project)
-
-        return registered_project
-
-    @staticmethod
-    @click.command("create", help="Create a new Serena project configuration.", context_settings={"max_content_width": _MAX_CONTENT_WIDTH})
-    @click.argument("project_path", type=click.Path(exists=True, file_okay=False), default=os.getcwd())
-    @click.option("--name", type=str, default=None, help="Project name; defaults to directory name if not specified.")
-    @click.option(
-        "--language", type=str, multiple=True, help="Programming language(s); inferred if not specified. Can be passed multiple times."
-    )
-    @click.option("--index", is_flag=True, help="Index the project after creation.")
-    @click.option(
-        "--log-level",
-        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
-        default="WARNING",
-        help="Log level for indexing (only used if --index is set).",
-    )
-    @click.option("--timeout", type=float, default=10, help="Timeout for indexing a single file (only used if --index is set).")
-    def create(project_path: str, name: str | None, language: tuple[str, ...], index: bool, log_level: str, timeout: float) -> None:
+@project_group.command("index")
+@click.argument("project", type=_PROJECT_TYPE, default=os.getcwd(), required=False)
+@click.option("--name", type=str, default=None, help="Project name (only if auto-creating project.yml).")
+@click.option("--language", type=str, multiple=True, help="Language(s). Inferred if not specified.")
+@click.option(
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    default="WARNING",
+    help="Log level for indexing.",
+)
+@click.option("--timeout", type=float, default=10, help="Per-file indexing timeout.")
+def project_index(project: str, name: str | None, language: tuple[str, ...], log_level: str, timeout: float) -> None:
+    """Index a project's symbols into the LSP cache."""
+    serena_config = SerenaConfig.from_config_file()
+    registered_project = serena_config.get_registered_project(project, autoregister=True)
+    if registered_project is None:
+        click.echo(f"No existing project found for '{project}'. Attempting auto-creation ...")
         try:
-            registered_project = ProjectCommands._create_project(project_path, name, language)
-            if index:
-                click.echo("Indexing project...")
-                ProjectCommands._index_project(registered_project, log_level, timeout=timeout)
-        except FileExistsError as e:
-            raise click.ClickException(f"Project already exists: {e}\nUse 'serena project index' to index an existing project.")
-        except ValueError as e:
+            registered_project = _create_project(project, name, language)
+        except Exception as e:
             raise click.ClickException(str(e))
+    _index_project(registered_project, log_level, timeout=timeout)
 
-    @staticmethod
-    @click.command(
-        "index",
-        help="Index a project by saving symbols to the LSP cache. Auto-creates project.yml if it doesn't exist.",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    @click.argument("project", type=PROJECT_TYPE, default=os.getcwd(), required=False)
-    @click.option("--name", type=str, default=None, help="Project name (only used if auto-creating project.yml).")
-    @click.option(
-        "--language",
-        type=str,
-        multiple=True,
-        help="Programming language(s) (only used if auto-creating project.yml). Inferred if not specified.",
-    )
-    @click.option(
-        "--log-level",
-        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
-        default="WARNING",
-        help="Log level for indexing.",
-    )
-    @click.option("--timeout", type=float, default=10, help="Timeout for indexing a single file.")
-    def index(project: str, name: str | None, language: tuple[str, ...], log_level: str, timeout: float) -> None:
-        serena_config = SerenaConfig.from_config_file()
-        registered_project = serena_config.get_registered_project(project, autoregister=True)
-        if registered_project is None:
-            # Project not found; auto-create it
-            click.echo(f"No existing project found for '{project}'. Attempting auto-creation ...")
+
+# ---------------------------------------------------------------------------
+# Internal helpers for project create / index
+# ---------------------------------------------------------------------------
+
+def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> RegisteredProject:
+    project_root = Path(project_path).resolve()
+    serena_config = SerenaConfig.from_config_file()
+    yml_path = serena_config.get_project_yml_location(str(project_root))
+    if os.path.exists(yml_path):
+        raise FileExistsError(f"Project file {yml_path} already exists.")
+
+    languages: list[Language] = []
+    if language:
+        for lang in language:
             try:
-                registered_project = ProjectCommands._create_project(project, name, language)
-            except Exception as e:
-                raise click.ClickException(str(e))
+                languages.append(Language(lang.lower()))
+            except ValueError:
+                all_langs = [l.value for l in Language]
+                raise ValueError(f"Unknown language '{lang}'. Supported: {all_langs}")
 
-        ProjectCommands._index_project(registered_project, log_level, timeout=timeout)
-
-    @staticmethod
-    def _index_project(registered_project: RegisteredProject, log_level: str, timeout: float) -> None:
-        lvl = logging.getLevelNamesMapping()[log_level.upper()]
-        logging.configure(level=lvl)
-        serena_config = SerenaConfig.from_config_file()
-        proj = registered_project.get_project_instance(serena_config=serena_config)
-        click.echo(f"Indexing symbols in {proj} …")
-        ls_mgr = proj.create_language_server_manager()
-        try:
-            log_file = os.path.join(proj.project_root, ".serena", "logs", "indexing.txt")
-
-            files = proj.gather_source_files()
-
-            collected_exceptions: list[Exception] = []
-            files_failed = []
-            language_file_counts: dict[Language, int] = collections.defaultdict(lambda: 0)
-            last_save_time = time.monotonic()
-            for i, f in enumerate(tqdm(files, desc="Indexing")):
-                try:
-                    ls = ls_mgr.get_language_server(f)
-                    ls.request_document_symbols(f)
-                    language_file_counts[ls.language] += 1
-                except Exception as e:
-                    log.error(f"Failed to index {f}, continuing.")
-                    collected_exceptions.append(e)
-                    files_failed.append(f)
-                now = time.monotonic()
-                if now - last_save_time >= 30:
-                    ls_mgr.save_all_caches()
-                    last_save_time = now
-            reported_language_file_counts = {k.value: v for k, v in language_file_counts.items()}
-            click.echo(f"Indexed files per language: {dict_string(reported_language_file_counts, brackets=None)}")
-            ls_mgr.save_all_caches()
-
-            if len(files_failed) > 0:
-                os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                with open(log_file, "w") as f:
-                    for file, exception in zip(files_failed, collected_exceptions, strict=True):
-                        f.write(f"{file}\n")
-                        f.write(f"{exception}\n")
-                click.echo(f"Failed to index {len(files_failed)} files, see:\n{log_file}")
-        finally:
-            ls_mgr.stop_all()
-
-    @staticmethod
-    @click.command(
-        "is_ignored_path",
-        help="Check if a path is ignored by the project configuration.",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
+    generated_conf = ProjectConfig.autogenerate(
+        project_root=project_path,
+        serena_config=serena_config,
+        project_name=name,
+        languages=languages if languages else None,
+        interactive=True,
     )
-    @click.argument("path", type=click.Path(exists=False, file_okay=True, dir_okay=True))
-    @click.argument("project", type=click.Path(exists=True, file_okay=False, dir_okay=True), default=os.getcwd())
-    def is_ignored_path(path: str, project: str) -> None:
-        """
-        Check if a given path is ignored by the project configuration.
+    languages_str = ", ".join([lang.value for lang in generated_conf.languages]) if generated_conf.languages else "N/A"
+    click.echo(f"Generated project with languages {{{languages_str}}} at {yml_path}.")
+    registered_project = serena_config.get_registered_project(str(project_root))
+    if registered_project is None:
+        registered_project = RegisteredProject(str(project_root), generated_conf)
+        serena_config.add_registered_project(registered_project)
+    return registered_project
 
-        :param path: The path to check.
-        :param project: The path to the project directory, defaults to the current working directory.
-        """
-        from serena.project import Project
 
-        serena_config = SerenaConfig.from_config_file()
-        proj = Project.load(os.path.abspath(project), serena_config=serena_config)
-        if os.path.isabs(path):
-            path = os.path.relpath(path, start=proj.project_root)
-        is_ignored = proj.is_ignored_path(path)
-        click.echo(f"Path '{path}' IS {'ignored' if is_ignored else 'IS NOT ignored'} by the project configuration.")
+def _index_project(registered_project: RegisteredProject, log_level: str, timeout: float) -> None:
+    from sensai.util.string import dict_string as _dict_string
 
-    @staticmethod
-    @click.command(
-        "index-file",
-        help="Index a single file by saving its symbols to the LSP cache.",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    @click.argument("file", type=click.Path(exists=True, file_okay=True, dir_okay=False))
-    @click.argument("project", type=click.Path(exists=True, file_okay=False, dir_okay=True), default=os.getcwd())
-    @click.option("--verbose", "-v", is_flag=True, help="Print detailed information about the indexed symbols.")
-    def index_file(file: str, project: str, verbose: bool) -> None:
-        """
-        Index a single file by saving its symbols to the LSP cache, useful for debugging.
-        :param file: path to the file to index, must be inside the project directory.
-        :param project: path to the project directory, defaults to the current working directory.
-        :param verbose: if set, prints detailed information about the indexed symbols.
-        """
-        from serena.project import Project
-
-        serena_config = SerenaConfig.from_config_file()
-        proj = Project.load(os.path.abspath(project), serena_config=serena_config)
-        if os.path.isabs(file):
-            file = os.path.relpath(file, start=proj.project_root)
-        if proj.is_ignored_path(file, ignore_non_source_files=True):
-            click.echo(f"'{file}' is ignored or declared as non-code file by the project configuration, won't index.")
-            exit(1)
-        ls_mgr = proj.create_language_server_manager()
-        try:
-            for ls in ls_mgr.iter_language_servers():
-                click.echo(f"Indexing for language {ls.language.value} …")
-                document_symbols = ls.request_document_symbols(file)
-                symbols, _ = document_symbols.get_all_symbols_and_roots()
-                if verbose:
-                    click.echo(f"Symbols in file '{file}':")
-                    for symbol in symbols:
-                        click.echo(f"  - {symbol['name']} at line {symbol['selectionRange']['start']['line']} of kind {symbol['kind']}")
-                ls.save_cache()
-                click.echo(f"Successfully indexed file '{file}', {len(symbols)} symbols saved to cache in {ls.cache_dir}.")
-        finally:
-            ls_mgr.stop_all()
-
-    @staticmethod
-    @click.command(
-        "health-check",
-        help="Perform a comprehensive health check of the project's tools and language server.",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    @click.argument("project", type=click.Path(exists=True, file_okay=False, dir_okay=True), default=os.getcwd())
-    def health_check(project: str) -> None:
-        """
-        Perform a comprehensive health check of the project's tools and language server.
-
-        :param project: path to the project directory, defaults to the current working directory.
-        """
-        # NOTE: completely written by Claude Code, only functionality was reviewed, not implementation
-        from serena.agent import SerenaAgent
-        from serena.project import Project
-        from serena.tools import FindReferencingSymbolsTool, FindSymbolTool, GetSymbolsOverviewTool, SearchForPatternTool
-
-        logging.configure(level=logging.INFO)
-        project_path = os.path.abspath(project)
-        serena_config = SerenaConfig.from_config_file()
-        serena_config.language_backend = LanguageBackend.LSP
-        proj = Project.load(project_path, serena_config=serena_config)
-
-        # Create log file with timestamp
-        timestamp = datetime_tag()
-        log_dir = os.path.join(project_path, ".serena", "logs", "health-checks")
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, f"health_check_{timestamp}.log")
-
-        with FileLoggerContext(log_file, append=False, enabled=True):
-            log.info("Starting health check for project: %s", project_path)
-
+    lvl = logging.getLevelNamesMapping()[log_level.upper()]
+    logging.configure(level=lvl)
+    serena_config = SerenaConfig.from_config_file()
+    proj = registered_project.get_project_instance(serena_config=serena_config)
+    click.echo(f"Indexing symbols in {proj} ...")
+    ls_mgr = proj.create_language_server_manager()
+    try:
+        log_file = os.path.join(proj.project_root, ".serena", "logs", "indexing.txt")
+        files = proj.gather_source_files()
+        collected_exceptions: list[Exception] = []
+        files_failed: list[str] = []
+        language_file_counts: dict[Language, int] = collections.defaultdict(lambda: 0)
+        last_save_time = time.monotonic()
+        for i, f in enumerate(tqdm(files, desc="Indexing")):
             try:
-                log.info("Creating SerenaAgent...")
-
-                agent = SerenaAgent(project=project_path, serena_config=serena_config)
-                log.info("SerenaAgent created successfully")
-
-                # Find first non-empty file that can be analyzed
-                log.info("Searching for analyzable files...")
-                files = proj.gather_source_files()
-                target_file = None
-
-                for file_path in files:
-                    try:
-                        full_path = os.path.join(project_path, file_path)
-                        if os.path.getsize(full_path) > 0:
-                            target_file = file_path
-                            log.info("Found analyzable file: %s", target_file)
-                            break
-                    except (OSError, FileNotFoundError):
-                        continue
-
-                if not target_file:
-                    log.error("No analyzable files found in project")
-                    click.echo("❌ Health check failed: No analyzable files found")
-                    click.echo(f"Log saved to: {log_file}")
-                    return
-
-                # Get tools from agent
-                overview_tool = agent.get_tool(GetSymbolsOverviewTool)
-                find_symbol_tool = agent.get_tool(FindSymbolTool)
-                find_refs_tool = agent.get_tool(FindReferencingSymbolsTool)
-                search_pattern_tool = agent.get_tool(SearchForPatternTool)
-
-                # Test 1: Get symbols overview
-                log.info("Testing GetSymbolsOverviewTool on file: %s", target_file)
-                overview_data = agent.execute_task(lambda: overview_tool.get_symbol_overview(target_file))
-                log.info(f"GetSymbolsOverviewTool returned: {overview_data}")
-
-                if not overview_data:
-                    log.error("No symbols found in file %s", target_file)
-                    click.echo("❌ Health check failed: No symbols found in target file")
-                    click.echo(f"Log saved to: {log_file}")
-                    return
-
-                # Extract suitable symbol (prefer class or function over variables)
-                preferred_kinds = {SymbolKind.Class.name, SymbolKind.Function.name, SymbolKind.Method.name, SymbolKind.Constructor.name}
-                selected_symbol = None
-                for symbol in overview_data:
-                    if symbol.get("kind") in preferred_kinds:
-                        selected_symbol = symbol
-                        break
-
-                # If no preferred symbol found, use first available
-                if not selected_symbol:
-                    selected_symbol = overview_data[0]
-                    log.info("No class or function found, using first available symbol")
-
-                symbol_name = selected_symbol["name"]
-                symbol_kind = selected_symbol["kind"]
-                log.info("Using symbol for testing: %s (kind: %s)", symbol_name, symbol_kind)
-
-                # Test 2: FindSymbolTool
-                log.info("Testing FindSymbolTool for symbol: %s", symbol_name)
-                find_symbol_result = agent.execute_task(
-                    lambda: find_symbol_tool.apply(symbol_name, relative_path=target_file, include_body=True)
-                )
-                find_symbol_data = json.loads(find_symbol_result)
-                log.info("FindSymbolTool found %d matches for symbol %s", len(find_symbol_data), symbol_name)
-
-                # Test 3: FindReferencingSymbolsTool
-                log.info("Testing FindReferencingSymbolsTool for symbol: %s", symbol_name)
-                try:
-                    find_refs_result = agent.execute_task(lambda: find_refs_tool.apply(symbol_name, relative_path=target_file))
-                    find_refs_data = json.loads(find_refs_result)
-                    log.info("FindReferencingSymbolsTool found %d references for symbol %s", len(find_refs_data), symbol_name)
-                except Exception as e:
-                    log.warning("FindReferencingSymbolsTool failed for symbol %s: %s", symbol_name, str(e))
-                    find_refs_data = []
-
-                # Test 4: SearchForPatternTool to verify references
-                log.info("Testing SearchForPatternTool for pattern: %s", symbol_name)
-                try:
-                    search_result = agent.execute_task(
-                        lambda: search_pattern_tool.apply(substring_pattern=symbol_name, restrict_search_to_code_files=True)
-                    )
-                    search_data = json.loads(search_result)
-                    pattern_matches = sum(len(matches) for matches in search_data.values())
-                    log.info("SearchForPatternTool found %d pattern matches for %s", pattern_matches, symbol_name)
-                except Exception as e:
-                    log.warning("SearchForPatternTool failed for pattern %s: %s", symbol_name, str(e))
-                    pattern_matches = 0
-
-                # Verify tools worked as expected
-                tools_working = True
-                if not find_symbol_data:
-                    log.error("FindSymbolTool returned no results")
-                    tools_working = False
-
-                if len(find_refs_data) == 0 and pattern_matches == 0:
-                    log.warning("Both FindReferencingSymbolsTool and SearchForPatternTool found no matches - this might indicate an issue")
-
-                log.info("Health check completed successfully")
-
-                if tools_working:
-                    click.echo("✅ Health check passed - All tools working correctly")
-                else:
-                    click.echo("⚠️  Health check completed with warnings - Check log for details")
-
+                ls = ls_mgr.get_language_server(f)
+                ls.request_document_symbols(f)
+                language_file_counts[ls.language] += 1
             except Exception as e:
-                log.exception("Health check failed with exception: %s", str(e))
-                click.echo(f"❌ Health check failed: {e!s}")
-
-            finally:
-                click.echo(f"Log saved to: {log_file}")
-
-
-class ToolCommands(AutoRegisteringGroup):
-    """Group for 'tool' subcommands."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            name="tools",
-            help="Commands related to Serena's tools. You can run `serena tools <command> --help` for more info on each command.",
-        )
-
-    @staticmethod
-    @click.command(
-        "list",
-        help="Prints an overview of the tools that are active by default (not just the active ones for your project). For viewing all tools, pass `--all / -a`",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    @click.option("--quiet", "-q", is_flag=True)
-    @click.option("--all", "-a", "include_optional", is_flag=True, help="List all tools, including those not enabled by default.")
-    @click.option("--only-optional", is_flag=True, help="List only optional tools (those not enabled by default).")
-    def list(quiet: bool = False, include_optional: bool = False, only_optional: bool = False) -> None:
-        from serena.tools import ToolRegistry
-
-        tool_registry = ToolRegistry()
-        if quiet:
-            if only_optional:
-                tool_names = tool_registry.get_tool_names_optional()
-            elif include_optional:
-                tool_names = tool_registry.get_tool_names()
-            else:
-                tool_names = tool_registry.get_tool_names_default_enabled()
-            for tool_name in tool_names:
-                click.echo(tool_name)
-        else:
-            ToolRegistry().print_tool_overview(include_optional=include_optional, only_optional=only_optional)
-
-    @staticmethod
-    @click.command(
-        "description",
-        help="Print the description of a tool, optionally with a specific context (the latter may modify the default description).",
-        context_settings={"max_content_width": _MAX_CONTENT_WIDTH},
-    )
-    @click.argument("tool_name", type=str)
-    def description(tool_name: str) -> None:
-        from serena.agent import SerenaAgent
-        from serena.mcp import SerenaMCPFactory
-
-        agent = SerenaAgent(project=None, serena_config=SerenaConfig(log_level=logging.INFO))
-        tool = agent.get_tool_by_name(tool_name)
-        mcp_tool = SerenaMCPFactory.make_mcp_tool(tool)
-        click.echo(mcp_tool.description)
-
-
-
-_project = ProjectCommands()
-_config = SerenaConfigCommands()
-_tools = ToolCommands()
-
-top_level = TopLevelCommands()
-for subgroup in (_project, _config, _tools):
-    top_level.add_command(subgroup)
+                log.error(f"Failed to index {f}, continuing.")
+                collected_exceptions.append(e)
+                files_failed.append(f)
+            now = time.monotonic()
+            if now - last_save_time >= 30:
+                ls_mgr.save_all_caches()
+                last_save_time = now
+        reported_language_file_counts = {k.value: v for k, v in language_file_counts.items()}
+        click.echo(f"Indexed files per language: {_dict_string(reported_language_file_counts, brackets=None)}")
+        ls_mgr.save_all_caches()
+        if files_failed:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            with open(log_file, "w") as f:
+                for file, exception in zip(files_failed, collected_exceptions, strict=True):
+                    f.write(f"{file}\n")
+                    f.write(f"{exception}\n")
+            click.echo(f"Failed to index {len(files_failed)} files, see:\n{log_file}")
+    finally:
+        ls_mgr.stop_all()
