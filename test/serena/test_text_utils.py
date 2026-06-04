@@ -15,7 +15,7 @@ class TestFindTextCoordinates:
         assert coords[2].line == 0 and coords[2].col == content.index("bar")
 
     def test_find_text_coordinates_require_unique_unchanged(self) -> None:
-        content = "only (one) here"
+        content = "alpha (foo) beta (foo)"
         with pytest.raises(ValueError, match="Match must be unique"):
             find_text_coordinates(content, r"\((\w+)\)", require_unique=True)
 

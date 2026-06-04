@@ -603,11 +603,11 @@ FIND_REFERENCE_CASES = [
 FIND_DEFINING_SYMBOL_REGEX_ERROR_CASES = [
     RegexDefiningSymbolErrorCase(
         language=Language.PYTHON,
-        id="python_regex_multiple_matches",
+        id="python_regex_no_match",
         relative_path=os.path.join("test_repo", "services.py"),
-        regex=r"(User)",
+        regex=r"(NoSuchSymbol)",
         containing_symbol_name_path="",
-        error_fragment="Match must be unique",
+        error_fragment="No match found for regex",
     ).to_pytest_param(),
     RegexDefiningSymbolErrorCase(
         language=Language.PYTHON,
@@ -890,6 +890,15 @@ class TestSerenaAgent:
             or expected_name in symbol.get("info", "")
         )
 
+    @staticmethod
+    def _parse_find_declaration_result(result: str) -> list[dict]:
+        """Parse find_declaration tool output (optional prefix/suffix around the JSON list)."""
+        if result.startswith("Found declaration."):
+            result = result.split("\n", 1)[1]
+        if "\n... and " in result:
+            result = result.split("\n", 1)[0]
+        return json.loads(result)
+
     def _assert_symbol_info_present(
         self,
         serena_agent: SerenaAgent,
@@ -900,7 +909,8 @@ class TestSerenaAgent:
             # kotlin LS doesn't seem to provide hover info right now, at least for the struct we test this on
             return
 
-        if symbol["kind"] in (SymbolKind.File.name, SymbolKind.Module.name):
+        symbol_kind = symbol.get("kind") or symbol.get("symbol_kind")
+        if symbol_kind in (SymbolKind.File.name, SymbolKind.Module.name):
             # we ignore file and module symbols for the info test
             return
 
@@ -914,7 +924,7 @@ class TestSerenaAgent:
             )
 
         # special additional test for Java, since Eclipse returns hover in a complex format and we want to make sure to get it right
-        if symbol["kind"] == SymbolKind.Class.name and serena_agent.get_active_lsp_languages() == [Language.JAVA]:
+        if symbol_kind == SymbolKind.Class.name and serena_agent.get_active_lsp_languages() == [Language.JAVA]:
             assert "A simple model class" in symbol_info, f"Java class docstring not found in symbol info: {symbol}"
 
     @pytest.mark.parametrize("serena_agent,case", FIND_SYMBOL_REFERENCES_CASES, indirect=["serena_agent"])
@@ -933,6 +943,15 @@ class TestSerenaAgent:
         )
         for symbol in symbols:
             self._assert_symbol_info_present(serena_agent, symbol, case.symbol_name)
+
+    @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
+    def test_find_symbol_truncation_shows_total_count(self, serena_agent: SerenaAgent) -> None:
+        """When max_matches limits results, agents see how many matches were omitted."""
+        find_symbol_tool = serena_agent.get_tool(FindSymbolTool)
+        result = find_symbol_tool.apply(name_path_pattern="__init__", max_matches=1)
+        assert "Showing 1 of" in result
+        assert " of " in result
+        assert "total matches" in result
 
     @pytest.mark.parametrize("serena_agent,case", FIND_REFERENCE_CASES, indirect=["serena_agent"])
     def test_find_symbol_references(self, serena_agent: SerenaAgent, case: FindReferenceCase) -> None:
@@ -979,16 +998,46 @@ class TestSerenaAgent:
             containing_symbol_name_path=case.containing_symbol_name_path,
             include_info=True,
         )
-        defining_symbol = json.loads(result)
-        assert defining_symbol is not None, f"Expected defining symbol for regex {case.regex!r} in {case.relative_path}"
-        assert defining_symbol.get("relative_path") is not None
-        assert case.expected_definition_file in defining_symbol["relative_path"], (
-            f"Expected defining symbol in {case.expected_definition_file!r}, got: {defining_symbol}"
+        declarations = self._parse_find_declaration_result(result)
+        assert declarations, f"Expected defining symbol for regex {case.regex!r} in {case.relative_path}"
+        matching = [
+            entry
+            for entry in declarations
+            if entry.get("relative_path") is not None and case.expected_definition_file in entry["relative_path"]
+        ]
+        assert matching, f"Expected defining symbol in {case.expected_definition_file!r}, got: {declarations}"
+        assert any(self._symbol_matches_expected_name(entry, case.expected_name) for entry in matching), (
+            f"Expected defining symbol name {case.expected_name!r}, got: {declarations}"
         )
-        assert self._symbol_matches_expected_name(defining_symbol, case.expected_name), (
-            f"Expected defining symbol name {case.expected_name!r}, got: {defining_symbol}"
+        for entry in matching:
+            self._assert_symbol_info_present(serena_agent, entry, case.expected_name)
+
+    @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
+    def test_find_declaration_multiple_regex_matches(self, serena_agent: SerenaAgent) -> None:
+        """Non-unique regex matches resolve to multiple declaration sites instead of raising."""
+        tool = serena_agent.get_tool(FindDeclarationTool)
+        result = tool.apply(
+            regex=r"(User|Item)",
+            relative_path=os.path.join("test_repo", "services.py"),
+            containing_symbol_name_path="",
         )
-        self._assert_symbol_info_present(serena_agent, defining_symbol)
+        declarations = self._parse_find_declaration_result(result)
+        assert len(declarations) >= 2, f"Expected multiple declaration entries, got: {declarations}"
+        relative_paths = {entry["relative_path"] for entry in declarations}
+        assert any("models.py" in path for path in relative_paths), declarations
+
+    @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
+    def test_find_declaration_truncates_unique_declarations(self, serena_agent: SerenaAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("serena.tools.symbol_tools.DEFAULT_MAX_RESULTS", 2)
+        tool = serena_agent.get_tool(FindDeclarationTool)
+        result = tool.apply(
+            regex=r"(User|Item|UserService|ItemService|ValueError)",
+            relative_path=os.path.join("test_repo", "services.py"),
+            containing_symbol_name_path="",
+        )
+        declarations = self._parse_find_declaration_result(result)
+        assert len(declarations) == 2
+        assert "... and " in result and " more. Provide a more specific regex" in result
 
     @pytest.mark.parametrize("serena_agent,case", FIND_DEFINING_SYMBOL_REGEX_ERROR_CASES, indirect=["serena_agent"])
     def test_find_declaration_error(
@@ -1271,6 +1320,15 @@ class TestSerenaAgent:
             result = safe_delete_tool.apply(name_path_pattern=case.name_path, relative_path=case.relative_path)
             assert "Cannot delete" in result, f"Expected deletion to be blocked due to existing references, but got: {result}"
             assert "referenced in" in result, f"Expected reference information in result, but got: {result}"
+
+    @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_SUCCEEDS_CASES, indirect=["serena_agent"])
+    def test_find_referencing_symbols_empty_includes_scope_note(
+        self, serena_agent: SerenaAgent, case: SafeDeleteCase
+    ) -> None:
+        """Empty reference results should explain project-scope limits, not imply zero usage."""
+        find_refs_tool = serena_agent.get_tool(FindReferencingSymbolsTool)
+        result = find_refs_tool.apply(name_path=case.name_path, relative_path=case.relative_path)
+        assert "currently active project scope" in result
 
     @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_SUCCEEDS_CASES, indirect=["serena_agent"])
     def test_safe_delete_symbol_succeeds_when_no_references(self, serena_agent: SerenaAgent, case: SafeDeleteCase):
