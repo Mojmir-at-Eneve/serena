@@ -678,6 +678,26 @@ def _create_project(project_path: str, name: str | None, language: tuple[str, ..
     return registered_project
 
 
+class ProjectCommands:
+    """
+    Namespace for programmatic access to project setup commands (used in tests).
+    Provides the Click command objects and the internal helpers.
+    """
+
+    create = project_create
+    index = project_index
+
+    @staticmethod
+    def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> RegisteredProject:
+        return _create_project(project_path, name, language)
+
+
+class TopLevelCommands:
+    """Namespace for programmatic access to top-level commands (used in tests)."""
+
+    start_mcp_server = cmd_start_mcp_server
+
+
 def _index_project(registered_project: RegisteredProject, log_level: str, timeout: float) -> None:
     from sensai.util.string import dict_string as _dict_string
 
