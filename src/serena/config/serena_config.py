@@ -220,6 +220,19 @@ Uses $projectDir and $projectFolderName as placeholders.
 
 
 @dataclass(kw_only=True)
+class ProjectCommand:
+    """
+    A named project command stored in project.yml.
+    Agents can define commands like 'test', 'lint', 'build' so they don't
+    have to remember the exact shell invocation each time.
+    """
+
+    command: str
+    description: str = ""
+    examples: list[str] = field(default_factory=list)
+
+
+@dataclass(kw_only=True)
 class ProjectConfig(SharedConfig):
     project_name: str
     languages: list[Language]
@@ -229,6 +242,9 @@ class ProjectConfig(SharedConfig):
     ignore_all_files_in_gitignore: bool = True
     initial_prompt: str = ""
     encoding: str = DEFAULT_SOURCE_FILE_ENCODING
+    # Named project commands: agents can add/update/remove these via manage_project_commands.
+    # Stored as name -> ProjectCommand so they survive across sessions.
+    commands: dict[str, ProjectCommand] = field(default_factory=dict)
 
     # internal fields which are not mapped to/from the configuration file (must start with "_")
     _local_override_keys: list[str] = field(default_factory=list)
@@ -457,6 +473,17 @@ class ProjectConfig(SharedConfig):
         included_optional_tools = data["included_optional_tools"] or []
         additional_workspace_folders = data.get("additional_workspace_folders") or []
 
+        # Parse named project commands (forward-compatible: missing key → empty dict)
+        raw_commands = data.get("commands") or {}
+        commands: dict[str, ProjectCommand] = {}
+        for cmd_name, cmd_data in raw_commands.items():
+            if isinstance(cmd_data, dict):
+                commands[cmd_name] = ProjectCommand(
+                    command=cmd_data.get("command", ""),
+                    description=cmd_data.get("description", ""),
+                    examples=list(cmd_data.get("examples", [])),
+                )
+
         return cls(
             project_name=data["project_name"],
             languages=languages,
@@ -473,6 +500,7 @@ class ProjectConfig(SharedConfig):
             language_backend=language_backend,
             symbol_info_budget=symbol_info_budget,
             ls_specific_settings=data.get("ls_specific_settings", {}),
+            commands=commands,
             _local_override_keys=local_override_keys,
         )
 
@@ -492,6 +520,11 @@ class ProjectConfig(SharedConfig):
         d["languages"] = [lang.value for lang in self.languages]
         d["language_backend"] = self.language_backend.value if self.language_backend is not None else None
         d["line_ending"] = self.line_ending.value if self.line_ending is not None else None
+        # commands: dict[str, ProjectCommand] → dict[str, dict]
+        d["commands"] = {
+            name: {"command": cmd.command, "description": cmd.description, "examples": cmd.examples}
+            for name, cmd in self.commands.items()
+        }
 
         return d
 
