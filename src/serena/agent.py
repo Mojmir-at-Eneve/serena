@@ -18,7 +18,7 @@ from serena.config.serena_config import RegisteredProject, SerenaConfig, SerenaP
 from serena.ls_manager import LanguageServerManager
 from serena.project import Project
 from serena.task_executor import TaskExecutor
-from serena.tools import ReplaceContentTool, Tool, ToolMarker, ToolRegistry
+from serena.tools import Tool, ToolMarker, ToolRegistry
 from serena.util.inspection import iter_subclasses
 from serena.util.logging import MemoryLogHandler
 from serena.workspace import ProjectUnit, SerenaWorkspace
@@ -55,7 +55,27 @@ class AvailableTools:
 
 
 class ToolSet:
-    LEGACY_TOOL_NAME_MAPPING = {"replace_regex": ReplaceContentTool.get_name_from_cls()}
+    # Legacy name mapping for tools that were renamed. Kept so that project.yml files
+    # written with old tool names can still be loaded without errors.
+    LEGACY_TOOL_NAME_MAPPING: dict[str, str] = {
+        "replace_regex": "search_and_replace",
+        "replace_content": "search_and_replace",
+        "execute_shell_command": "run_command",
+        "initial_instructions": "start_here",
+        "get_workspace_status": "start_here",
+        "get_current_config": "start_here",
+        "activate_project": "manage_project",
+        "remove_project": "manage_project",
+        "get_symbols_overview": "symbols_overview",
+        "find_referencing_symbols": "find_usages",
+        "find_declaration": "find_definition",
+        "get_diagnostics_for_file": "check_errors",
+        "get_diagnostics_for_symbol": "check_symbol_errors",
+        "replace_symbol_body": "rewrite_symbol",
+        "insert_after_symbol": "inject_code",
+        "insert_before_symbol": "inject_code",
+        "safe_delete_symbol": "delete_symbol",
+    }
 
     def __init__(self, tool_names: set[str]) -> None:
         self._tool_names = tool_names

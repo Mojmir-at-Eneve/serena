@@ -393,7 +393,7 @@ class Tool(Component):
                         known = self.agent.serena_config.project_names
                         known_hint = f" Known projects: {known}." if known else ""
                         return (
-                            "Error: No active project. Call `activate_project` with the IDE workspace root path "
+                            "Error: No active project. Call manage_project with the workspace root path "
                             "(absolute path to the project directory)."
                             + known_hint
                         )

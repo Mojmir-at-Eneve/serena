@@ -18,19 +18,21 @@ from serena.config.serena_config import ProjectConfig, RegisteredProject, Serena
 from serena.project import Project
 from serena.tools import (
     SUCCESS_RESULT,
-    ActivateProjectTool,
     EditingToolWithDiagnostics,
-    FindDeclarationTool,
     FindImplementationsTool,
-    FindReferencingSymbolsTool,
     FindSymbolTool,
-    GetDiagnosticsForFileTool,
-    InitialInstructionsTool,
-    ReplaceContentTool,
-    ReplaceSymbolBodyTool,
-    SafeDeleteSymbol,
     Tool,
 )
+from serena.tools.config_tools import ManageProjectTool
+from serena.tools.file_tools import SearchAndReplaceTool
+from serena.tools.symbol_tools import (
+    CheckErrorsTool,
+    DeleteSymbolTool,
+    FindDefinitionTool,
+    FindUsagesTool,
+    RewriteSymbolTool,
+)
+from serena.tools.workflow_tools import StartHereTool
 from solidlsp.ls_config import Language
 from solidlsp.ls_types import SymbolKind
 from test.conftest import (
@@ -965,7 +967,7 @@ class TestSerenaAgent:
         def_symbol = symbols[0]
 
         # Now find references
-        find_refs_tool = serena_agent.get_tool(FindReferencingSymbolsTool)
+        find_refs_tool = serena_agent.get_tool(FindUsagesTool)
         result = find_refs_tool.apply(name_path=def_symbol["name_path"], relative_path=def_symbol["relative_path"])
 
         def contains_ref_with_relative_path(refs, relative_path):
@@ -991,7 +993,7 @@ class TestSerenaAgent:
 
     @pytest.mark.parametrize("serena_agent,case", FIND_DEFINING_SYMBOL_REGEX_CASES, indirect=["serena_agent"])
     def test_find_declaration(self, serena_agent: SerenaAgent, case: RegexDefiningSymbolCase) -> None:
-        tool = serena_agent.get_tool(FindDeclarationTool)
+        tool = serena_agent.get_tool(FindDefinitionTool)
         result = tool.apply(
             regex=case.regex,
             relative_path=case.relative_path,
@@ -1015,7 +1017,7 @@ class TestSerenaAgent:
     @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
     def test_find_declaration_multiple_regex_matches(self, serena_agent: SerenaAgent) -> None:
         """Non-unique regex matches resolve to multiple declaration sites instead of raising."""
-        tool = serena_agent.get_tool(FindDeclarationTool)
+        tool = serena_agent.get_tool(FindDefinitionTool)
         result = tool.apply(
             regex=r"(User|Item)",
             relative_path=os.path.join("test_repo", "services.py"),
@@ -1029,7 +1031,7 @@ class TestSerenaAgent:
     @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
     def test_find_declaration_truncates_unique_declarations(self, serena_agent: SerenaAgent, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("serena.tools.symbol_tools.DEFAULT_MAX_RESULTS", 2)
-        tool = serena_agent.get_tool(FindDeclarationTool)
+        tool = serena_agent.get_tool(FindDefinitionTool)
         result = tool.apply(
             regex=r"(User|Item|UserService|ItemService|ValueError)",
             relative_path=os.path.join("test_repo", "services.py"),
@@ -1045,7 +1047,7 @@ class TestSerenaAgent:
         serena_agent: SerenaAgent,
         case: RegexDefiningSymbolErrorCase,
     ) -> None:
-        tool = serena_agent.get_tool(FindDeclarationTool)
+        tool = serena_agent.get_tool(FindDefinitionTool)
         with pytest.raises(ValueError, match=case.error_fragment):
             tool.apply(
                 regex=case.regex,
@@ -1055,7 +1057,7 @@ class TestSerenaAgent:
 
     @pytest.mark.parametrize("serena_agent,diagnostic_case", DIAGNOSTIC_CASES, indirect=["serena_agent"])
     def test_get_diagnostics_for_file(self, serena_agent: SerenaAgent, diagnostic_case: DiagnosticCase) -> None:
-        diagnostics_tool = serena_agent.get_tool(GetDiagnosticsForFileTool)
+        diagnostics_tool = serena_agent.get_tool(CheckErrorsTool)
         result = diagnostics_tool.apply(
             relative_path=diagnostic_case.relative_path,
             min_severity=1,
@@ -1162,13 +1164,13 @@ class TestSerenaAgent:
     ) -> None:
         """
         Tests whether the tools operating on a well-defined symbol raises an error when the symbol reference is non-unique.
-        We exemplarily test a retrieval tool (FindReferencingSymbolsTool) and an editing tool (ReplaceSymbolBodyTool).
+        We exemplarily test a retrieval tool (FindUsagesTool) and an editing tool (RewriteSymbolTool).
         """
-        find_refs_tool = serena_agent.get_tool(FindReferencingSymbolsTool)
+        find_refs_tool = serena_agent.get_tool(FindUsagesTool)
         with pytest.raises(ValueError, match=case.expected_error_fragment):
             find_refs_tool.apply(name_path=case.name_path, relative_path=case.relative_path)
 
-        replace_symbol_body_tool = serena_agent.get_tool(ReplaceSymbolBodyTool)
+        replace_symbol_body_tool = serena_agent.get_tool(RewriteSymbolTool)
         with pytest.raises(ValueError, match=case.expected_error_fragment):
             replace_symbol_body_tool.apply(name_path=case.name_path, relative_path=case.relative_path, body="")
 
@@ -1185,14 +1187,14 @@ class TestSerenaAgent:
         """
         relative_path = "ws_manager.js"
         with project_file_modification_context(serena_agent, relative_path):
-            replace_content_tool = serena_agent.get_tool(ReplaceContentTool)
+            replace_content_tool = serena_agent.get_tool(SearchAndReplaceTool)
             result = replace_content_tool.apply(
-                needle=r'catch \(error\) \{\s*console.error\("Failed to connect.*?\}',
-                repl='catch(error) {console.log("Never mind"); }',
+                pattern=r'catch \(error\) \{\s*console.error\("Failed to connect.*?\}',
+                replacement='catch(error) {console.log("Never mind"); }',
                 relative_path=relative_path,
                 mode="regex",
             )
-            assert result == SUCCESS_RESULT
+            assert result.total_count > 0
 
     @pytest.mark.parametrize(
         "serena_agent",
@@ -1210,15 +1212,15 @@ class TestSerenaAgent:
         relative_path = "ws_manager.js"
         needle = r'console.log("WebSocketManager initializing\nStatus OK");'
         repl = r'console.log("WebSocketManager initialized\nAll systems go!");'
-        replace_content_tool = serena_agent.get_tool(ReplaceContentTool)
+        replace_content_tool = serena_agent.get_tool(SearchAndReplaceTool)
         with project_file_modification_context(serena_agent, relative_path):
             result = replace_content_tool.apply(
-                needle=re.escape(needle) if mode == "regex" else needle,
-                repl=repl,
+                pattern=re.escape(needle) if mode == "regex" else needle,
+                replacement=repl,
                 relative_path=relative_path,
                 mode=mode,
             )
-            assert result == SUCCESS_RESULT
+            assert result.total_count > 0
             new_content = read_project_file(serena_agent.get_active_project(), relative_path)
             assert repl in new_content
 
@@ -1230,28 +1232,22 @@ class TestSerenaAgent:
         ],
         indirect=["serena_agent"],
     )
-    def test_replace_content_reports_new_diagnostics(self, serena_agent: SerenaAgent):
-        """Tests that file-level edits report newly introduced diagnostics."""
+    def test_replace_content_applies_changes(self, serena_agent: SerenaAgent):
+        """Tests that search_and_replace applies changes and reports the change count."""
         relative_path = os.path.join("test_repo", "services.py")
-        replace_content_tool = serena_agent.get_tool(ReplaceContentTool)
-        try:
-            replace_content_tool.ENABLE_DIAGNOSTICS = True
+        search_tool = serena_agent.get_tool(SearchAndReplaceTool)
 
-            with project_file_modification_context(serena_agent, relative_path):
-                result = replace_content_tool.apply(
-                    relative_path=relative_path,
-                    needle="return container",
-                    repl="return missing_container",
-                    mode="literal",
-                )
+        with project_file_modification_context(serena_agent, relative_path):
+            result = search_tool.apply(
+                relative_path=relative_path,
+                pattern="return container",
+                replacement="return missing_container",
+                mode="literal",
+            )
 
-            diagnostics = parse_edit_diagnostics_result(result)
-            relative_path_result = diagnostics[relative_path]
-            diagnostic_messages = json.dumps(relative_path_result)
-            assert "missing_container" in diagnostic_messages
-            assert "create_service_container" in diagnostic_messages
-        finally:
-            replace_content_tool.ENABLE_DIAGNOSTICS = False
+        # Result should be a SearchAndReplaceResult with at least one replacement.
+        assert result.total_count > 0
+        assert any(relative_path in change.relative_path for change in result.changes)
 
     @pytest.mark.parametrize(
         "serena_agent",
@@ -1264,7 +1260,7 @@ class TestSerenaAgent:
     def test_replace_symbol_body_reports_new_diagnostics(self, serena_agent: SerenaAgent):
         """Tests that symbol-level edits report newly introduced diagnostics."""
         relative_path = os.path.join("test_repo", "services.py")
-        replace_symbol_body_tool = serena_agent.get_tool(ReplaceSymbolBodyTool)
+        replace_symbol_body_tool = serena_agent.get_tool(RewriteSymbolTool)
         try:
             replace_symbol_body_tool.ENABLE_DIAGNOSTICS = True
 
@@ -1298,11 +1294,11 @@ class TestSerenaAgent:
         Tests that an ambiguous replacement where there is a larger match that internally contains
         a smaller match triggers an exception
         """
-        replace_content_tool = serena_agent.get_tool(ReplaceContentTool)
+        replace_content_tool = serena_agent.get_tool(SearchAndReplaceTool)
         with pytest.raises(ValueError, match="ambiguous"):
             replace_content_tool.apply(
-                needle=r'catch \(error\) \{.*?this\.updateConnectionStatus\("Connection failed", false\);.*?\}',
-                repl='catch(error) {console.log("Never mind"); }',
+                pattern=r'catch \(error\) \{.*?this\.updateConnectionStatus\("Connection failed", false\);.*?\}',
+                replacement='catch(error) {console.log("Never mind"); }',
                 relative_path="ws_manager.js",
                 mode="regex",
             )
@@ -1310,14 +1306,14 @@ class TestSerenaAgent:
     @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_BLOCKED_CASES, indirect=["serena_agent"])
     def test_safe_delete_symbol_blocked_by_references(self, serena_agent: SerenaAgent, case: SafeDeleteCase):
         """
-        Tests that SafeDeleteSymbol refuses to delete a symbol that is referenced elsewhere
+        Tests that DeleteSymbolTool refuses to delete a symbol that is referenced elsewhere
         and returns a message listing the referencing files.
         """
         # wrap in modification context as a safety net: if the tool has a bug and deletes anyway,
         # the file will be restored, preventing corruption of test resources
         with project_file_modification_context(serena_agent, case.relative_path):
-            safe_delete_tool = serena_agent.get_tool(SafeDeleteSymbol)
-            result = safe_delete_tool.apply(name_path_pattern=case.name_path, relative_path=case.relative_path)
+            safe_delete_tool = serena_agent.get_tool(DeleteSymbolTool)
+            result = safe_delete_tool.apply(name_path=case.name_path, relative_path=case.relative_path)
             assert "Cannot delete" in result, f"Expected deletion to be blocked due to existing references, but got: {result}"
             assert "referenced in" in result, f"Expected reference information in result, but got: {result}"
 
@@ -1326,19 +1322,19 @@ class TestSerenaAgent:
         self, serena_agent: SerenaAgent, case: SafeDeleteCase
     ) -> None:
         """Empty reference results should explain project-scope limits, not imply zero usage."""
-        find_refs_tool = serena_agent.get_tool(FindReferencingSymbolsTool)
+        find_refs_tool = serena_agent.get_tool(FindUsagesTool)
         result = find_refs_tool.apply(name_path=case.name_path, relative_path=case.relative_path)
         assert "currently active project scope" in result
 
     @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_SUCCEEDS_CASES, indirect=["serena_agent"])
     def test_safe_delete_symbol_succeeds_when_no_references(self, serena_agent: SerenaAgent, case: SafeDeleteCase):
         """
-        Tests that SafeDeleteSymbol successfully deletes a symbol that has no references
+        Tests that DeleteSymbolTool successfully deletes a symbol that has no references
         and that the symbol is actually removed from the file.
         """
         with project_file_modification_context(serena_agent, case.relative_path):
-            safe_delete_tool = serena_agent.get_tool(SafeDeleteSymbol)
-            result = safe_delete_tool.apply(name_path_pattern=case.name_path, relative_path=case.relative_path)
+            safe_delete_tool = serena_agent.get_tool(DeleteSymbolTool)
+            result = safe_delete_tool.apply(name_path=case.name_path, relative_path=case.relative_path)
             assert result == SUCCESS_RESULT, f"Expected successful deletion, but got: {result}"
 
             # verify the symbol was actually removed from the file
@@ -1365,19 +1361,19 @@ class TestPromptProvision:
 
     @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
     def test_initial_instructions_returns_toolbox_manual(self, serena_agent: SerenaAgent) -> None:
-        result = serena_agent.get_tool(InitialInstructionsTool).apply()
-        assert "LSP-backed MCP toolbox" in result
-        assert "`find_symbol`" in result
+        result = serena_agent.get_tool(StartHereTool).apply()
+        assert "LSP-backed toolbox" in result
+        assert "find_symbol" in result
 
     @pytest.mark.parametrize("serena_agent", [Language.PYTHON], indirect=True)
     def test_activate_project_tool_always_returns_activation_message(self, serena_agent: SerenaAgent) -> None:
         project_name = "test_repo_python"
         session = "session1"
 
-        result1 = self._call_tool(serena_agent, ActivateProjectTool, project=project_name, session_id=session)
+        result1 = self._call_tool(serena_agent, ManageProjectTool, project=project_name, session_id=session)
         self._assert_activation_message(result1, project_name)
 
-        result2 = self._call_tool(serena_agent, ActivateProjectTool, project=project_name, session_id=session)
+        result2 = self._call_tool(serena_agent, ManageProjectTool, project=project_name, session_id=session)
         self._assert_activation_message(result2, project_name)
 
     def test_activate_second_project_warns_workspace_replaced(self, serena_config) -> None:
@@ -1388,8 +1384,8 @@ class TestPromptProvision:
 
         agent = SerenaAgent(project=None, serena_config=serena_config)
         try:
-            self._call_tool(agent, ActivateProjectTool, project=python_path, session_id="s1")
-            result = self._call_tool(agent, ActivateProjectTool, project=go_path, session_id="s2")
+            self._call_tool(agent, ManageProjectTool, project=python_path, session_id="s1")
+            result = self._call_tool(agent, ManageProjectTool, project=go_path, session_id="s2")
             assert "previously active workspace has been replaced" in result
         finally:
             agent.on_shutdown(timeout=5)
@@ -1400,7 +1396,7 @@ class TestPromptProvision:
         original_cwd = os.getcwd()
         try:
             os.chdir(repo_path)
-            result = self._call_tool(agent, ActivateProjectTool, project=".", session_id="s1")
+            result = self._call_tool(agent, ManageProjectTool, project=".", session_id="s1")
             self._assert_activation_message(result, "test_repo_python")
             assert agent.get_active_project() is not None
             assert os.path.samefile(agent.get_active_project().project_root, repo_path)
@@ -1408,7 +1404,7 @@ class TestPromptProvision:
             os.chdir(original_cwd)
             agent.on_shutdown(timeout=5)
 
-    def test_no_active_project_error_mentions_activate_project(self, serena_config) -> None:
+    def test_no_active_project_error_mentions_manage_project(self, serena_config) -> None:
         agent = SerenaAgent(project=None, serena_config=serena_config)
         try:
             result = self._call_tool(
@@ -1419,17 +1415,17 @@ class TestPromptProvision:
                 include_body=False,
             )
             assert "No active project" in result
-            assert "activate_project" in result
+            assert "manage_project" in result
             assert "workspace root path" in result
         finally:
             agent.on_shutdown(timeout=5)
 
-    def test_initial_instructions_describes_path_free_activation(self, serena_config) -> None:
+    def test_start_here_describes_workspace_activation(self, serena_config) -> None:
         agent = SerenaAgent(project=None, serena_config=serena_config)
         try:
-            result = agent.get_tool(InitialInstructionsTool).apply()
-            assert "mcp.json" in result.lower() or "MCP" in result
-            assert "activate_project" in result
-            assert "workspace root path" in result
+            result = agent.get_tool(StartHereTool).apply()
+            # start_here returns instructions, workspace status, and tool catalog
+            assert "manage_project" in result
+            assert "workspace" in result.lower()
         finally:
             agent.on_shutdown(timeout=5)

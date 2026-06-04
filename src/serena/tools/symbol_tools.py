@@ -793,8 +793,7 @@ class DeleteSymbolTool(Tool, ToolMarkerSymbolicEdit):
                 file_to_lines[ref_relative_path].append(ref_loc["range"]["start"]["line"])
         if file_to_lines:
             return (
-                f"Cannot delete: symbol '{symbol_name_path}' is still referenced. "
-                f"References: {self._to_json(file_to_lines)}"
+                f"Cannot delete: symbol '{symbol_name_path}' is referenced in: {self._to_json(file_to_lines)}"
             )
         code_editor = self.create_ls_code_editor()
         code_editor.delete_symbol(symbol_name_path, relative_file_path=symbol_rel_path)
