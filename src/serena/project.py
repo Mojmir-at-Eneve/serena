@@ -290,7 +290,11 @@ class Project(ToStringMixin):
 
         if require_not_ignored:
             if self.is_ignored_path(relative_path):
-                raise ValueError(f"Path {relative_path} is ignored; cannot access for safety reasons")
+                raise ValueError(
+                    f"Path '{relative_path}' is excluded by the project ignore configuration "
+                    f"(check .serena/project.yml or the global Serena config ignore list). "
+                    f"To include it, remove it from the ignore list."
+                )
 
     def gather_source_files(self, relative_path: str = "") -> list[str]:
         """Retrieves relative paths of all source files, optionally limited to the given path
