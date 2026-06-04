@@ -20,7 +20,7 @@ from serena.agent import SerenaAgent
 from serena.config.serena_config import SerenaConfig
 from serena.constants import SERENA_LOG_FORMAT
 from serena.tools import Tool
-from serena.tools.workflow_tools import InitialInstructionsTool
+from serena.tools.workflow_tools import StartHereTool
 from serena.util.exception import show_fatal_exception_safe
 from serena.util.logging import MemoryLogHandler
 
@@ -163,6 +163,8 @@ class SerenaMCPFactory:
                 self.agent.on_shutdown()
 
     def _get_initial_instructions(self) -> str:
+        # Use StartHereTool to populate MCP server instructions at startup.
+        # This gives new clients the same context they'd get from calling start_here.
         assert self.agent is not None
-        tool = self.agent.get_tool(InitialInstructionsTool)
+        tool = self.agent.get_tool(StartHereTool)
         return tool.apply()
