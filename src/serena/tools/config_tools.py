@@ -1,78 +1,72 @@
-from sensai.util.helper import mark_used
+"""
+Project management tool for the Serena MCP toolbox.
 
-from serena.cli import resolve_project_for_activation
-from serena.tools import Tool, ToolMarkerDoesNotRequireActiveProject, ToolMarkerOptional
+ManageProjectTool consolidates project activation and removal into a single
+intent-driven tool, replacing the former ActivateProjectTool and RemoveProjectTool.
+"""
 
-# OpenDashboardTool removed: web dashboard is not part of the internal MCP deployment.
+from typing import Literal
+
+from serena.tools.tools_base import Tool, ToolMarkerDoesNotRequireActiveProject
 
 
-class ActivateProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
+class ManageProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
     """
-    Activates a project based on the project name or path.
+    Activates or removes a Serena project.
 
-    Multi-project activation:
-    - Activating a **parent directory** that contains multiple Serena projects automatically
-      discovers and registers all nested projects as a multi-project workspace.
-    - Activating a **child directory** directly sets only that project as the active workspace,
-      replacing any previously active workspace.
-    - Example: activating ``C:\\repos`` discovers ``C:\\repos\\ProjectA`` and
-      ``C:\\repos\\ProjectB`` together; activating ``C:\\repos\\ProjectA`` alone replaces
-      the workspace.
+    Activation discovers multi-project workspaces automatically:
+    - Activating a parent directory containing multiple Serena projects registers
+      all nested projects as a single multi-project workspace.
+    - Activating a child project directory sets only that project as the active
+      workspace, replacing any previously active workspace.
     """
 
     # noinspection PyIncorrectDocstring
     # (session_id is injected via apply_ex)
-    def apply(self, project: str = "", session_id: str = "") -> str:
+    def apply(
+        self,
+        action: Literal["activate", "remove"] = "activate",
+        project: str = "",
+        session_id: str = "",
+    ) -> str:
         """
-        Activates the project with the given name or path.
+        Manage a Serena project: activate it for use or remove it from configuration.
 
-        Activating a parent directory discovers all nested Serena projects as one workspace;
-        activating a child project path replaces any previously active workspace with that
-        project alone. See the class docstring for examples.
+        For 'activate': auto-detects the project from the server working directory when
+        project is empty. Activating a parent directory discovers all nested projects as
+        one workspace; activating a child path replaces any active workspace with that
+        project alone.
 
-        :param project: registered project name, absolute path to the project directory, or empty/``.``
-            to auto-detect from the server working directory. When MCP is configured without a fixed
-            project path, pass the IDE workspace root path from the host environment.
+        For 'remove': permanently removes the named project from Serena's configuration.
+        The project must be referenced by its registered name.
+
+        :param action: 'activate' to load a project for use, 'remove' to delete it from config.
+        :param project: for 'activate' — registered project name, absolute path to the project
+            directory, or empty to auto-detect from the server working directory. For 'remove' —
+            the registered project name to delete.
+        :return: confirmation with workspace health summary for activate, or success message for remove.
         """
+        from sensai.util.helper import mark_used
+
+        from serena.cli import resolve_project_for_activation
+
+        if action == "remove":
+            if not project:
+                return "Error: 'project' must be provided when action is 'remove'."
+            self.agent.serena_config.remove_project(project)
+            return f"Removed project '{project}' from Serena configuration."
+
+        # action == "activate"
         try:
-            resolved_project = resolve_project_for_activation(project)
+            resolved_project = resolve_project_for_activation(project or None)
         except ValueError as e:
             return f"Error: {e}"
+
         is_new_activation = self.agent.activate_project_from_path_or_name(resolved_project)
         mark_used(is_new_activation)
-        # get_project_activation_message() now returns the full workspace health summary.
         result = self.agent.get_project_activation_message()
         replacement_warning = self.agent.consume_last_workspace_replacement_warning()
         if replacement_warning is not None:
             result = f"{replacement_warning}\n\n{result}"
-        result += (
-            "\nCall `initial_instructions` if you have not yet read the Serena toolbox manual."
-        )
+        result += "\nCall start_here if you have not yet initialized your session."
         return result
-
-
-class RemoveProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject, ToolMarkerOptional):
-    """
-    Removes a project from the Serena configuration.
-    """
-
-    def apply(self, project_name: str) -> str:
-        """
-        Removes a project from the Serena configuration.
-
-        :param project_name: Name of the project to remove
-        """
-        self.agent.serena_config.remove_project(project_name)
-        return f"Successfully removed project '{project_name}' from configuration."
-
-
-class GetCurrentConfigTool(Tool):
-    """
-    Prints the current configuration of the agent, including the active and available projects and tools.
-    """
-
-    def apply(self) -> str:
-        """
-        Print the current configuration of the agent, including the active and available projects and tools.
-        """
-        return self.agent.get_current_config_overview()
