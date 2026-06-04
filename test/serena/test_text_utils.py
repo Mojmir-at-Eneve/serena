@@ -15,9 +15,17 @@ class TestFindTextCoordinates:
         assert coords[2].line == 0 and coords[2].col == content.index("bar")
 
     def test_find_text_coordinates_require_unique_unchanged(self) -> None:
-        content = "only (one) here"
+        # require_unique=True must still reject ambiguous multi-match content.
+        content = "alpha (foo) beta (foo) gamma (bar)"
         with pytest.raises(ValueError, match="Match must be unique"):
             find_text_coordinates(content, r"\((\w+)\)", require_unique=True)
+
+    def test_find_text_coordinates_require_unique_single_match(self) -> None:
+        content = "only (one) here"
+        coords = find_text_coordinates(content, r"\((\w+)\)", require_unique=True)
+        assert coords is not None
+        assert coords.line == 0
+        assert coords.col == content.index("one")
 
 
 class TestSearchText:
