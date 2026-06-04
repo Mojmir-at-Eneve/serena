@@ -63,6 +63,9 @@ _SKIP_DIRS: frozenset[str] = frozenset(
 # Maximum directory depth to recurse (workspace root = depth 0).
 _DEFAULT_MAX_DEPTH: int = 6
 
+# Shallow scan depth when checking for indexable source files in health_summary.
+_SOURCE_FILE_SCAN_MAX_DEPTH: int = 3
+
 
 @dataclass
 class ProjectUnit:
@@ -362,7 +365,13 @@ class SerenaWorkspace:
                 if failed_langs:
                     status_parts.append(f"DEGRADED (failed: {', '.join(failed_langs)})")
                 else:
-                    status_parts.append("OK")
+                    # LS can report OK on marker-only repos (e.g. .sln without .cs); flag empty indexes.
+                    if _has_indexable_source_files(proj, active_langs):
+                        status_parts.append("OK")
+                    else:
+                        status_parts.append(
+                            "OK (no source files indexed — LS started but found no indexable source)"
+                        )
                 if active_langs:
                     status_parts.append(f"active_ls={active_langs}")
 
@@ -374,3 +383,45 @@ class SerenaWorkspace:
             )
 
         return "\n".join(lines)
+
+
+def _source_extensions_for_language_values(language_values: list[str]) -> frozenset[str]:
+    """Collect file extensions for active/configured languages from the central registry."""
+    from solidlsp.language_registry import get_entry
+
+    extensions: set[str] = set()
+    for lang_value in language_values:
+        entry = get_entry(lang_value)
+        if entry is not None:
+            extensions.update(entry.extensions)
+    return frozenset(extensions)
+
+
+def _has_indexable_source_files(proj: Project, active_lang_values: list[str]) -> bool:
+    """
+    Return True if at least one source file for the active languages exists under the project root.
+
+    Uses a shallow directory walk (not a full tree scan) so health checks stay lightweight.
+  """
+    lang_values = active_lang_values or [lang.value for lang in proj.project_config.languages]
+    extensions = _source_extensions_for_language_values(lang_values)
+    if not extensions:
+        # Unknown language metadata — do not claim the index is empty.
+        return True
+
+    root = proj.project_root
+    for dirpath, dirnames, filenames in os.walk(root):
+        depth = 0 if dirpath == root else len(Path(dirpath).relative_to(root).parts)
+        if depth >= _SOURCE_FILE_SCAN_MAX_DEPTH:
+            dirnames.clear()
+        else:
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in _SKIP_DIRS and not d.startswith(".")
+            ]
+        for filename in filenames:
+            for ext in extensions:
+                if filename.endswith(ext):
+                    return True
+    return False

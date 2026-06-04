@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from solidlsp.ls_config import Language
+
 from serena.workspace import ProjectUnit, SerenaWorkspace, _SKIP_DIRS
 
 
@@ -229,6 +231,28 @@ class TestSerenaWorkspaceDiscovery:
 # ---------------------------------------------------------------------------
 # Backward compat: single-project workspace behaves like the old model
 # ---------------------------------------------------------------------------
+
+
+class TestHealthSummary:
+    def test_health_summary_flags_no_indexable_source_files(self) -> None:
+        """C# LS can be OK on .sln-only trees with no .cs files — surface that in health."""
+        with tempfile.TemporaryDirectory() as proj_root:
+            Path(proj_root, "App.sln").write_text(
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n",
+                encoding="utf-8",
+            )
+            proj = _make_mock_project(proj_root, "sln_only")
+            proj.project_config.languages = [Language.CSHARP]
+            ls_mgr = MagicMock()
+            ls_mgr.get_active_languages.return_value = [Language.CSHARP]
+            ls_mgr.get_failed_languages.return_value = []
+            proj.language_server_manager = ls_mgr
+
+            ws = SerenaWorkspace(proj_root, [_unit(proj_root, "", name="sln_only")])
+            ws.units[0].project = proj
+
+            summary = ws.health_summary()
+            assert "no source files indexed" in summary
 
 
 class TestSingleProjectBackwardCompat:
