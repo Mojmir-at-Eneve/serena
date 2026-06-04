@@ -18,7 +18,7 @@ from serena.tools import (
 )
 from serena.tools.tools_base import DEFAULT_MAX_RESULTS, ToolMarkerOptional
 from serena.util.ls_diagnostics import GroupedDiagnostics
-from serena.util.text_utils import find_text_coordinates
+from serena.util.text_utils import TextCoords, find_all_text_coordinates
 from solidlsp.ls_types import SymbolKind
 
 
@@ -463,41 +463,80 @@ class FindDeclarationTool(Tool, ToolMarkerSymbolicRead):
         unit, proj_rel = self.resolve_project(relative_path)
         symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
 
-        # find relevant location for lookup
+        # Collect every regex match (optionally scoped to a containing symbol body).
         editor = self.create_ls_code_editor_for(unit.project)
+        line_offset = 0
         if not containing_symbol_name_path:
             content = editor.read_file(proj_rel)
-            coords = find_text_coordinates(content, regex, require_unique=True)
-            assert coords is not None
         else:
             symbol = symbol_retriever.find_unique(name_path_pattern=containing_symbol_name_path, within_relative_path=proj_rel)
-            body_line_numers = symbol.get_body_line_numbers_or_raise()
-            content = editor.read_file(proj_rel, lines=body_line_numers)
-            coords = find_text_coordinates(content, regex, require_unique=True)
-            assert coords is not None
-            coords.line += body_line_numers[0]
+            body_line_numbers = symbol.get_body_line_numbers_or_raise()
+            content = editor.read_file(proj_rel, lines=body_line_numbers)
+            line_offset = body_line_numbers[0]
 
-        # retrieve declaration
-        defining_symbol = symbol_retriever.find_declaration(
-            relative_file_path=proj_rel,
-            line=coords.line,
-            column=coords.col,
-            include_body=include_body,
-        )
-        if defining_symbol is None:
+        match_coords = find_all_text_coordinates(content, regex)
+        if not match_coords:
+            raise ValueError(f"No match found for regex: {regex}")
+        if line_offset:
+            match_coords = [TextCoords(coords.line + line_offset, coords.col) for coords in match_coords]
+
+        # Resolve go-to-definition for each match; dedupe by declaration file + line.
+        unique_declarations: list[dict[str, Any]] = []
+        seen_declaration_sites: set[tuple[str, int]] = set()
+        for coords in match_coords:
+            defining_symbol = symbol_retriever.find_declaration(
+                relative_file_path=proj_rel,
+                line=coords.line,
+                column=coords.col,
+                include_body=include_body,
+            )
+            if defining_symbol is None:
+                continue
+            declaration_relative_path = defining_symbol.relative_path
+            declaration_line = defining_symbol.line
+            if declaration_relative_path is None or declaration_line is None:
+                continue
+            declaration_key = (declaration_relative_path, declaration_line)
+            if declaration_key in seen_declaration_sites:
+                continue
+            seen_declaration_sites.add(declaration_key)
+
+            entry: dict[str, Any] = {
+                "relative_path": declaration_relative_path,
+                "line": declaration_line,
+            }
+            name_path = defining_symbol.get_name_path()
+            if name_path:
+                entry["name_path"] = name_path
+            entry["symbol_kind"] = defining_symbol.symbol_kind_name
+            if include_body and defining_symbol.body is not None:
+                entry["body"] = defining_symbol.body
+            if include_info:
+                if symbol_info := symbol_retriever.request_info_for_symbol(defining_symbol):
+                    entry["info"] = symbol_info
+            unique_declarations.append(entry)
+
+        if not unique_declarations:
             raise ValueError(
-                f"No symbol declaration found at the location of the regex match. Location: {relative_path}:{coords.line}:{coords.col}."
+                f"No symbol declaration found for any of the {len(match_coords)} regex match(es) in {relative_path}."
             )
 
-        # create output
-        symbol_dict = self._defining_symbol_to_result_dict(
-            symbol_retriever,
-            defining_symbol,
-            include_body,
-            include_info,
-        )
-        result = self._to_json(symbol_dict)
-        return result
+        return self._format_declaration_results(unique_declarations)
+
+    def _format_declaration_results(self, unique_declarations: list[dict[str, Any]]) -> str:
+        total_unique = len(unique_declarations)
+        truncated = unique_declarations[:DEFAULT_MAX_RESULTS]
+        result_json = self._to_json(truncated)
+
+        if total_unique == 1:
+            return f"Found declaration.\n{result_json}"
+        if total_unique > DEFAULT_MAX_RESULTS:
+            n_more = total_unique - DEFAULT_MAX_RESULTS
+            return (
+                f"{result_json}\n"
+                f"... and {n_more} more. Provide a more specific regex to narrow results."
+            )
+        return result_json
 
     @staticmethod
     def _defining_symbol_to_result_dict(
