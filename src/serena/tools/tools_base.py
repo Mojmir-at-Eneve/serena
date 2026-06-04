@@ -31,6 +31,10 @@ log = logging.getLogger(__name__)
 T = TypeVar("T")
 SUCCESS_RESULT = "OK"
 
+# Default cap for tools that return multiple results (declarations, symbols, etc.).
+# Keeps responses manageable; pass -1 or a higher value explicitly for unlimited.
+DEFAULT_MAX_RESULTS = 12
+
 
 class Component(ABC):
     def __init__(self, agent: "SerenaAgent"):
