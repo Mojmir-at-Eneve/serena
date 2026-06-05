@@ -205,14 +205,13 @@ def _agent_from_ctx(ctx: click.Context) -> "SerenaAgent":  # type: ignore[name-d
 # ---------------------------------------------------------------------------
 
 @top_level.command("start-here")
-@click.option("--project", "project", default="", help="Project path or registered name to activate.")
 @click.pass_context
-def cmd_start_here(ctx: click.Context, project: str) -> None:
-    """Initialize the session: auto-detect project, return instructions + workspace status."""
+def cmd_start_here(ctx: click.Context) -> None:
+    """Check workspace state and return instructions + directory scan for project activation."""
     from serena.tools.workflow_tools import StartHereTool
 
     agent = _agent_from_ctx(ctx)
-    _run_tool_cli(agent, StartHereTool, project=project)
+    _run_tool_cli(agent, StartHereTool)
 
 
 @top_level.command("manage-project")

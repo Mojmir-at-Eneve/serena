@@ -20,7 +20,6 @@ from serena.agent import SerenaAgent
 from serena.config.serena_config import SerenaConfig
 from serena.constants import SERENA_LOG_FORMAT
 from serena.tools import Tool
-from serena.tools.workflow_tools import StartHereTool
 from serena.util.exception import show_fatal_exception_safe
 from serena.util.logging import MemoryLogHandler
 
@@ -163,8 +162,16 @@ class SerenaMCPFactory:
                 self.agent.on_shutdown()
 
     def _get_initial_instructions(self) -> str:
-        # Use StartHereTool to populate MCP server instructions at startup.
-        # This gives new clients the same context they'd get from calling start_here.
-        assert self.agent is not None
-        tool = self.agent.get_tool(StartHereTool)
-        return tool.apply()
+        # start_here is now a lightweight passive tool that the agent must call
+        # explicitly at the start of each session. The MCP instructions field
+        # carries only the mandatory directive so that no activation logic runs
+        # at server startup and the agent always performs the decision itself.
+        return (
+            "IMPORTANT: You are connected to the Serena MCP server — an LSP-backed "
+            "toolbox for IDE-grade code intelligence. "
+            "Always call start_here as the very first tool in every session before "
+            "using any other Serena tool. "
+            "start_here checks workspace state, scans the server working directory, "
+            "and returns the full Serena guide plus tool catalog so you can decide "
+            "how to activate the project."
+        )

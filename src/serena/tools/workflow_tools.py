@@ -1,14 +1,20 @@
 """
 Session-start tool for the Serena MCP toolbox.
 
-start_here is the single entry point for new sessions: it auto-detects the
-project, initialises the workspace, and returns everything an agent needs to
-start working — instructions, workspace health, and the tool catalog — in a
-single call.
+start_here is the required first call for every session. It is intentionally
+lightweight: it checks whether a workspace is already active, scans the server
+working directory one level deep to show which subdirectories are already
+configured, and returns the full Serena guide plus the tool catalog.
+
+Activation is NOT performed by start_here — the agent reads the scan output,
+decides whether this is a single project or a monorepo, and calls
+manage_project or initialize_subprojects with the correct arguments (including
+the required language parameter).
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from serena.tools.tools_base import Tool, ToolMarkerDoesNotRequireActiveProject, ToolRegistry
@@ -30,14 +36,19 @@ It gives you symbol search, go-to-definition, find-usages, diagnostics, and
 semantic edits backed by the language server for the active project.
 
 QUICK START
-1. Run start_here once per session. It activates the project and returns
-   this guide plus workspace health.
-2. Explore a file: symbols_overview <file>
-3. Find symbols: find_symbol <pattern>
-4. Find text: search <exact_text>  or  search_regex <pattern>
-5. Edit semantically: rewrite_symbol / inject_code / rename_symbol
-6. Replace text: search_and_replace <exact>  or  search_and_replace_regex <pattern>
-7. Verify: check_errors <file>  or  run_project_command test
+1. Run start_here once per session (REQUIRED FIRST STEP). It checks whether a
+   workspace is already active and scans the server working directory so you
+   can decide how to activate.
+2. If no workspace is active, review the scan output and call:
+   - Single project: manage_project(action="activate", project=<path>, language=<lang>)
+   - Monorepo: initialize_subprojects(parent_path=<path>, language=<lang>) first,
+     then manage_project(action="activate", project=<path>, language=<lang>)
+3. Explore a file: symbols_overview <file>
+4. Find symbols: find_symbol <pattern>
+5. Find text: search <exact_text>  or  search_regex <pattern>
+6. Edit semantically: rewrite_symbol / inject_code / rename_symbol
+7. Replace text: search_and_replace <exact>  or  search_and_replace_regex <pattern>
+8. Verify: check_errors <file>  or  run_project_command test
 
 PATH CONVENTIONS
 All file paths are relative to the workspace root. In multi-project
@@ -46,8 +57,7 @@ project a symbol or match belongs to.
 
 MULTI-PROJECT WORKSPACES (monorepos)
 When multiple sub-directories each have .serena/project.yml, activating
-the parent folder loads ALL of them as one workspace. start_here lists
-every active project unit and its language-server status.
+the parent folder loads ALL of them as one workspace.
 
 Key rules:
 - Activate the PARENT (monorepo root), never individual child dirs — activating
@@ -55,7 +65,8 @@ Key rules:
 - File paths include the sub-project folder: backend/src/Foo.cs, not src/Foo.cs.
 - Every result carries [project_id] so you always know which project owns it.
 - If a language server fails in one unit, the others keep running (degraded mode).
-- To set up: run `serena project create` in each sub-directory, then activate root.
+- To set up: call initialize_subprojects with the parent path and language, then
+  activate the parent with manage_project.
 
 LINE NUMBERS
 All line numbers are 0-based (first line of a file is line 0).
@@ -141,52 +152,106 @@ def _build_tool_catalog() -> str:
     return "\n".join(lines)
 
 
+def _scan_cwd_for_projects() -> str:
+    """
+    Non-recursively scan the server cwd and report which immediate
+    subdirectories already have a .serena/project.yml.
+
+    This is a lightweight, read-only check (os.scandir + os.path.isfile only)
+    intended to give the agent enough information to decide between
+    single-project and monorepo activation without triggering any indexing or
+    language detection.
+    """
+    cwd = os.getcwd()
+    lines: list[str] = [f"Working directory: {cwd}"]
+
+    try:
+        subdirs = sorted(
+            (entry for entry in os.scandir(cwd) if entry.is_dir(follow_symlinks=False)),
+            key=lambda e: e.name,
+        )
+    except PermissionError:
+        lines.append("(cannot scan working directory — permission denied)")
+        return "\n".join(lines)
+
+    root_yml = os.path.join(cwd, ".serena", "project.yml")
+    has_root_config = os.path.isfile(root_yml)
+    if has_root_config:
+        lines.append("Root has .serena/project.yml — configured as a single-project root.")
+
+    if not subdirs:
+        lines.append("No subdirectories found.")
+    else:
+        configured: list[str] = []
+        unconfigured: list[str] = []
+        for entry in subdirs:
+            yml = os.path.join(entry.path, ".serena", "project.yml")
+            if os.path.isfile(yml):
+                configured.append(entry.name)
+            else:
+                unconfigured.append(entry.name)
+
+        if configured:
+            lines.append(
+                f"Subdirectories with .serena/project.yml ({len(configured)}): "
+                + ", ".join(configured)
+            )
+        if unconfigured:
+            lines.append(
+                f"Subdirectories without .serena/project.yml ({len(unconfigured)}): "
+                + ", ".join(unconfigured)
+            )
+
+    # Provide an actionable decision hint so the agent knows its next step.
+    has_any_config = has_root_config or bool(configured if subdirs else False)
+
+    if has_any_config:
+        lines.append(
+            "\nDECISION: Some projects are already configured.\n"
+            "- To activate as monorepo (all configured subdirs): "
+            'manage_project(action="activate", project="<parent_path>", language="<lang>")\n'
+            "- If some subdirs are still missing config: "
+            'initialize_subprojects(parent_path="<path>", language="<lang>") first, '
+            'then manage_project(action="activate", ...)\n'
+            "- To activate a single configured project: "
+            'manage_project(action="activate", project="<subdir_path>", language="<lang>")'
+        )
+    else:
+        lines.append(
+            "\nDECISION: No .serena/project.yml files found — projects need initialisation.\n"
+            "- Single project: "
+            'manage_project(action="activate", project="<path>", language="<lang>")\n'
+            "- Monorepo: "
+            'initialize_subprojects(parent_path="<path>", language="<lang>") first, '
+            'then manage_project(action="activate", project="<path>", language="<lang>")'
+        )
+
+    return "\n".join(lines)
+
+
 class StartHereTool(Tool, ToolMarkerDoesNotRequireActiveProject):
     """
-    Initialises the session: auto-detects and activates the project, then
-    returns the Serena guide, workspace health, and the full tool catalog.
+    Checks workspace state, scans the server working directory for project
+    configuration files, and returns the Serena guide plus the full tool
+    catalog.
 
     Call this at the start of every session before using any other tool.
-    If a project is already active the activation step is a no-op.
+    Does NOT activate any project — the agent inspects the scan output and
+    calls manage_project or initialize_subprojects with the correct arguments,
+    including the required language parameter.
     """
 
-    def apply(self, project: str = "") -> str:
+    def apply(self) -> str:
         """
-        Start the session. Activates the project (if not already active), then
-        returns usage instructions, workspace health, and the tool catalog.
+        Start the session. Returns workspace status (health summary if active,
+        or a directory scan with activation guidance if not), the Serena guide,
+        and the full tool catalog.
 
-        Pass a project path or registered name only when you want to override
-        the auto-detected project. Normally leave this empty.
+        No project activation is performed. After reviewing the output, call
+        manage_project or initialize_subprojects to activate the workspace.
 
-        :param project: optional project root path or registered project name.
-            Leave empty to auto-detect from the server working directory.
-        :return: full session context: guide + workspace status + tool catalog.
+        :return: full session context: guide + workspace status/scan + config + tool catalog.
         """
-        from serena.cli import resolve_project_for_activation
-
-        activation_note = ""
-        replacement_warning = ""
-
-        # Only attempt activation when no project is currently active.
-        if self.agent.get_active_project() is None:
-            try:
-                resolved = resolve_project_for_activation(project or None)
-                self.agent.activate_project_from_path_or_name(resolved)
-                replacement_warning = self.agent.consume_last_workspace_replacement_warning() or ""
-            except ValueError:
-                # Could not detect a project; return clear guidance.
-                known = self.agent.serena_config.project_names
-                known_hint = f"\nKnown registered projects: {known}" if known else ""
-                activation_note = (
-                    "NO PROJECT ACTIVE\n"
-                    "Call manage_project with the workspace root path to activate a project."
-                    + known_hint
-                )
-
-        # Workspace health summary.
-        workspace = self.agent.get_active_workspace()
-        health = workspace.health_summary() if workspace is not None else "No workspace active."
-
         # Build the main instruction block with a live tool catalog.
         catalog = _build_tool_catalog()
         instructions = _INSTRUCTIONS.format(tool_catalog=catalog)
@@ -194,18 +259,27 @@ class StartHereTool(Tool, ToolMarkerDoesNotRequireActiveProject):
         # Config overview (active tools, version, settings).
         config_overview = self.agent.get_current_config_overview()
 
-        sections: list[str] = [instructions]
-        if replacement_warning:
-            sections.append(f"NOTE: {replacement_warning}")
-        sections.append(f"WORKSPACE STATUS\n{health}")
-        sections.append(f"ACTIVE CONFIGURATION\n{config_overview}")
-        if activation_note:
-            sections.append(activation_note)
+        workspace = self.agent.get_active_workspace()
 
-        # Actionable setup notes — only emitted when something needs fixing.
+        sections: list[str] = [instructions]
+        sections.append(f"ACTIVE CONFIGURATION\n{config_overview}")
+
         if workspace is not None:
+            # Workspace is already active — report health only, no scan needed.
+            health = workspace.health_summary()
+            sections.append(f"WORKSPACE STATUS\n{health}")
             setup_notes = _build_setup_notes(workspace)
             if setup_notes:
                 sections.append(f"SETUP NOTES\n{setup_notes}")
+        else:
+            # No active workspace — scan cwd and guide the agent to decide.
+            scan_result = _scan_cwd_for_projects()
+            known = self.agent.serena_config.project_names
+            known_hint = (
+                f"\nKnown registered projects: {known}" if known else ""
+            )
+            sections.append(
+                "NO WORKSPACE ACTIVE\n\n" + scan_result + known_hint
+            )
 
         return "\n\n---\n\n".join(sections)

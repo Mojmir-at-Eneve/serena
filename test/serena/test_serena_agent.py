@@ -1545,9 +1545,59 @@ class TestPromptProvision:
         agent = SerenaAgent(project=None, serena_config=serena_config)
         try:
             result = agent.get_tool(StartHereTool).apply()
-            # start_here returns instructions, workspace status, and tool catalog
+            # start_here is now passive: returns scan + guidance rather than activating.
+            # "manage_project" must appear in the DECISION guidance, "workspace" in the
+            # NO WORKSPACE ACTIVE header.
             assert "manage_project" in result
             assert "workspace" in result.lower()
+        finally:
+            agent.on_shutdown(timeout=5)
+
+    def test_start_here_no_active_project_returns_scan_and_guidance(self, serena_config, tmp_path) -> None:
+        """start_here without an active workspace must scan the cwd and return
+        actionable DECISION guidance — without activating any project."""
+        import os
+
+        # Build a minimal directory structure with one configured and one unconfigured subdir.
+        configured = tmp_path / "svc_a"
+        configured.mkdir()
+        serena_dir = configured / ".serena"
+        serena_dir.mkdir()
+        (serena_dir / "project.yml").write_text("project_name: svc_a\nlanguages: []\n")
+
+        unconfigured = tmp_path / "svc_b"
+        unconfigured.mkdir()
+
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = agent.get_tool(StartHereTool).apply()
+            # Must report scan findings.
+            assert "svc_a" in result
+            assert "svc_b" in result
+            # Must include actionable decision guidance.
+            assert "DECISION" in result
+            # Must NOT have activated any project.
+            assert agent.get_active_project() is None
+        finally:
+            os.chdir(original_cwd)
+            agent.on_shutdown(timeout=5)
+
+    def test_start_here_active_project_returns_health_not_scan(self, serena_config) -> None:
+        """When a workspace is already active, start_here must return the health summary
+        and NOT include directory scan output."""
+        python_path = get_repo_path(Language.PYTHON)
+        if not Path(python_path).exists():
+            pytest.skip("Python test repo not available")
+
+        agent = SerenaAgent(project=str(python_path), serena_config=serena_config)
+        try:
+            result = agent.get_tool(StartHereTool).apply()
+            assert "WORKSPACE STATUS" in result
+            # Scan section must not appear when workspace is already active.
+            assert "NO WORKSPACE ACTIVE" not in result
+            assert "DECISION" not in result
         finally:
             agent.on_shutdown(timeout=5)
 
