@@ -242,7 +242,7 @@ class CodeEditor(Generic[TSymbol], ABC):
             edited_file.delete_text_between_positions(start_pos, end_pos)
 
     @abstractmethod
-    def rename_symbol(self, name_path: str, relative_path: str, new_name: str) -> str:
+    def rename_symbol(self, name_path: str, relative_path: str, new_name: str, dry_run: bool = False) -> str:
         pass
 
 
@@ -352,14 +352,17 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
             operation.apply()
         return len(operations)
 
-    def rename_symbol(self, name_path: str, relative_path: str, new_name: str) -> str:
+    def rename_symbol(self, name_path: str, relative_path: str, new_name: str, dry_run: bool = False) -> str:
         """
         Renames a symbol, file, or directory throughout the codebase.
 
         :param name_path: the name path of the symbol to rename
         :param relative_path: the relative path of the file containing the symbol.
         :param new_name: the new name
-        :return: a status message
+        :param dry_run: if True, resolve the target symbol and return its info without applying
+            the rename. Use this to verify the correct overload is targeted before committing.
+        :return: a status message including the resolved symbol info; when dry_run is True only
+            the resolved symbol info is returned (no rename applied).
         """
         symbol = self._find_unique_symbol(name_path, relative_path)
         if not symbol.location.has_position_in_file():
@@ -368,6 +371,20 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
         # After has_position_in_file check, line and column are guaranteed to be non-None
         assert symbol.location.line is not None
         assert symbol.location.column is not None
+
+        # Always build resolved-symbol info so callers can confirm the correct overload was targeted.
+        start_line, end_line = symbol.get_body_line_numbers()
+        resolved_info = {
+            "resolved_name_path": symbol.get_name_path(),
+            "line": symbol.location.line,
+            "body_start_line": start_line,
+            "body_end_line": end_line,
+            "detail": symbol.symbol_root.get("detail"),
+        }
+
+        if dry_run:
+            # Return resolved symbol info without applying any changes.
+            return "DRY RUN — target symbol resolved (no rename applied):\n" + json.dumps(resolved_info, indent=2)
 
         lang_server = self._get_language_server(relative_path)
         rename_result = lang_server.request_rename_symbol_edit(
@@ -385,5 +402,8 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
                 f"Renaming symbol '{name_path}' to '{new_name}' resulted in no changes being applied; renaming may not be supported."
             )
 
-        msg = f"Successfully renamed '{name_path}' to '{new_name}' ({num_changes} changes applied)"
+        msg = (
+            f"Successfully renamed '{name_path}' to '{new_name}' ({num_changes} changes applied)\n"
+            f"Resolved symbol:\n{json.dumps(resolved_info, indent=2)}"
+        )
         return msg
