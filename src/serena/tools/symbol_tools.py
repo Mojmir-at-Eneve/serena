@@ -583,6 +583,66 @@ class FindDefinitionTool(Tool, ToolMarkerSymbolicRead):
         return result_json
 
 
+class SearchWorkspaceSymbolsTool(Tool, ToolMarkerSymbolicRead):
+    """
+    Fast fuzzy search for symbols across the whole workspace using the language server's
+    workspace symbol index.
+
+    Unlike find_symbol (which walks the full symbol tree), this uses the LS's own
+    prefix/fuzzy matching and is much faster for "find anything named X" queries in
+    large solutions. Returns name, kind, file, and line for each match.
+    """
+
+    # noinspection PyDefaultArgument
+    def apply(
+        self,
+        query: str,
+        max_results: int = DEFAULT_MAX_RESULTS,
+        max_answer_chars: int = -1,
+    ) -> str:
+        """
+        Search the workspace symbol index for symbols matching the given query.
+
+        The query is forwarded directly to the language server, which typically supports
+        prefix matching, CamelCase abbreviations (e.g. "CB" matches "CheckBalance"), and
+        substring matching depending on the server implementation.
+
+        :param query: symbol search query (prefix, substring, or abbreviation).
+        :param max_results: maximum number of results to return; -1 for unlimited. Default 12.
+        :param max_answer_chars: cap on result size; -1 uses the configured default.
+        :return: list of matching symbols with name, kind, file, and line.
+        """
+        ws = self.workspace
+        all_results: list[dict] = []
+        seen: set[tuple[str, Any, Any]] = set()
+        for unit in ws.units:
+            retriever = self.create_language_server_symbol_retriever_for(unit.project)
+            try:
+                items = retriever.search_workspace_symbols(query)
+                for item in items:
+                    key = (item["name"], item.get("relative_path"), item.get("line"))
+                    if key not in seen:
+                        seen.add(key)
+                        all_results.append(item)
+            except Exception as exc:
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning("search_workspace_symbols: skipping unit %s: %s", unit.project_id, exc)
+
+        if not all_results:
+            return f"No symbols found matching query: {query!r}"
+
+        total = len(all_results)
+        if 0 < max_results < total:
+            all_results = all_results[:max_results]
+            prefix = f"Showing {max_results} of {total} results (pass max_results=-1 for unlimited).\n"
+        else:
+            prefix = ""
+
+        result_json = self._to_json(all_results)
+        return self._limit_length(prefix + result_json, max_answer_chars)
+
+
 class CheckErrorsTool(Tool, ToolMarkerSymbolicRead):
     """
     Returns LSP diagnostics (errors, warnings, hints) for a file, grouped by

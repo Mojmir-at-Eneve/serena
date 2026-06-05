@@ -129,6 +129,15 @@ class TestCSharpLanguageServer:
         assert refs_second_call == refs, "Second call to request_references should return the same results"
 
     @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_workspace_symbol_search(self, language_server: SolidLanguageServer) -> None:
+        """Test workspace/symbol search returns matching symbols from the project."""
+        results = language_server.request_workspace_symbol("Calculator")
+        assert results is not None, "request_workspace_symbol should not return None"
+        assert len(results) > 0, "Should find at least one symbol matching 'Calculator'"
+        names = [r.get("name", "") for r in results]
+        assert any("Calculator" in name for name in names), f"Expected 'Calculator' in results, got: {names}"
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
     def test_hover_includes_type_information(self, language_server: SolidLanguageServer) -> None:
         """Test that hover information is available and includes type information."""
         file_path = os.path.join("Models", "Person.cs")

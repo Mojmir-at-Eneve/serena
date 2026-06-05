@@ -1272,6 +1272,38 @@ class LanguageServerSymbolRetriever:
                 result[current_symbol] = diagnostics
         return result
 
+    def search_workspace_symbols(self, query: str) -> list[dict[str, Any]]:
+        """
+        Search for symbols across the whole workspace using the language server's workspace symbol index.
+
+        Unlike ``find()``, which walks the full symbol tree, this forwards the query directly to
+        the language server's own fuzzy/prefix matcher — much faster in large solutions.
+
+        :param query: query string (prefix, camelCase abbreviation, or substring; behaviour depends on LS)
+        :return: list of dicts with keys ``name``, ``kind`` (str), ``relative_path``, ``line``
+        """
+        results: list[dict[str, Any]] = []
+        seen: set[tuple[str, str | None, int | None]] = set()
+        for lang_server in self._ls_manager.iter_language_servers():
+            items = lang_server.request_workspace_symbol(query)
+            if not items:
+                continue
+            for item in items:
+                name = item.get("name", "")
+                location = item.get("location") or {}
+                rel_path: str | None = location.get("relativePath") if isinstance(location, dict) else None
+                line: int | None = None
+                if isinstance(location, dict):
+                    rng = location.get("range") or {}
+                    line = (rng.get("start") or {}).get("line")
+                kind_name = SymbolKind(item.get("kind", 0)).name
+                key = (name, rel_path, line)
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({"name": name, "kind": kind_name, "relative_path": rel_path, "line": line})
+        return results
+
     def get_symbol_overview(self, relative_path: str) -> dict[str, list[LanguageServerSymbol]]:
         """
         :param relative_path: the path of the file for which to get the symbol overview
