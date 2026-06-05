@@ -334,6 +334,79 @@ class TestHealthSummary:
             summary = ws.health_summary()
             assert "no source files indexed" in summary
 
+    def test_health_summary_healthy_units_collapsed(self) -> None:
+        """Units that are fully healthy must not get individual detail lines —
+        they are folded into a single count line to keep the output compact."""
+        with tempfile.TemporaryDirectory() as proj_root:
+            # Write a real .py file so the health check finds indexable source.
+            Path(proj_root, "main.py").write_text("x = 1\n", encoding="utf-8")
+
+            proj = _make_mock_project(proj_root, "healthy")
+            proj.project_config.languages = [Language.PYTHON]
+            ls_mgr = MagicMock()
+            ls_mgr.get_active_languages.return_value = [Language.PYTHON]
+            ls_mgr.get_failed_languages.return_value = []
+            proj.language_server_manager = ls_mgr
+
+            ws = SerenaWorkspace(proj_root, [_unit(proj_root, "", name="healthy")])
+            ws.units[0].project = proj
+
+            summary = ws.health_summary()
+            # Compact count line must appear.
+            assert "1 project unit(s) OK" in summary
+            # Individual detail line must NOT appear.
+            assert "languages=" not in summary
+
+    def test_health_summary_error_units_listed_individually(self) -> None:
+        """Units in LS_ERROR state must appear as individual lines so the user
+        knows exactly which projects need attention."""
+        with tempfile.TemporaryDirectory() as proj_root:
+            proj = _make_mock_project(proj_root, "broken")
+            proj.project_config.languages = [Language.PYTHON]
+            proj.language_server_manager = None
+            proj._language_server_manager_init_error = "Node.js not found"
+
+            ws = SerenaWorkspace(proj_root, [_unit(proj_root, "", name="broken")])
+            ws.units[0].project = proj
+
+            summary = ws.health_summary()
+            assert "LS_ERROR" in summary
+            assert "Node.js not found" in summary
+            # No misleading OK count when only error units exist.
+            assert "project unit(s) OK" not in summary
+
+    def test_attention_units_excludes_healthy(self) -> None:
+        """attention_units() must return nothing when all units are healthy."""
+        with tempfile.TemporaryDirectory() as proj_root:
+            Path(proj_root, "main.py").write_text("x = 1\n", encoding="utf-8")
+
+            proj = _make_mock_project(proj_root, "ok_proj")
+            proj.project_config.languages = [Language.PYTHON]
+            ls_mgr = MagicMock()
+            ls_mgr.get_active_languages.return_value = [Language.PYTHON]
+            ls_mgr.get_failed_languages.return_value = []
+            proj.language_server_manager = ls_mgr
+
+            ws = SerenaWorkspace(proj_root, [_unit(proj_root, "", name="ok_proj")])
+            ws.units[0].project = proj
+
+            assert ws.attention_units() == []
+
+    def test_attention_units_includes_ls_error(self) -> None:
+        """attention_units() must include units whose LS failed to start."""
+        with tempfile.TemporaryDirectory() as proj_root:
+            proj = _make_mock_project(proj_root, "errored")
+            proj.project_config.languages = [Language.PYTHON]
+            proj.language_server_manager = None
+            proj._language_server_manager_init_error = "binary missing"
+
+            ws = SerenaWorkspace(proj_root, [_unit(proj_root, "", name="errored")])
+            ws.units[0].project = proj
+
+            attention = ws.attention_units()
+            assert len(attention) == 1
+            assert attention[0] == ("errored", "LS_ERROR")
+
 
 class TestSingleProjectBackwardCompat:
     def test_primary_unit_covers_all_paths(self) -> None:

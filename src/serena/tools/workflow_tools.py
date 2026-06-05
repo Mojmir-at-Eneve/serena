@@ -7,7 +7,14 @@ start working — instructions, workspace health, and the tool catalog — in a
 single call.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from serena.tools.tools_base import Tool, ToolMarkerDoesNotRequireActiveProject, ToolRegistry
+
+if TYPE_CHECKING:
+    from serena.workspace import SerenaWorkspace
 
 # -------------------------------------------------------------------------
 # Agent instructions — compact reference shown at session start.
@@ -70,6 +77,41 @@ name via run_project_command in future sessions.
 TOOL CATALOG
 {tool_catalog}
 """
+
+
+def _build_setup_notes(workspace: "SerenaWorkspace") -> str:
+    """
+    Build an actionable SETUP NOTES block for units that need attention.
+
+    Returns an empty string when everything is healthy so the section is
+    omitted entirely from start_here output — no noise when nothing is wrong.
+    """
+    attention = workspace.attention_units()
+    if not attention:
+        return ""
+
+    lines: list[str] = []
+    for project_id, tag in attention:
+        if tag == "LS_ERROR":
+            lines.append(
+                f"- [{project_id}] Language server failed to start (LS_ERROR). "
+                "Check that the required runtime is on PATH and re-activate, "
+                "or remove the unsupported language from .serena/project.yml."
+            )
+        elif tag == "DEGRADED":
+            lines.append(
+                f"- [{project_id}] Some language servers failed (DEGRADED). "
+                "Run check_errors or inspect the Serena log for details."
+            )
+        elif tag == "NO_SOURCE":
+            lines.append(
+                f"- [{project_id}] Language server started but no source files were indexed. "
+                "Verify the configured languages match the files in this directory."
+            )
+        else:
+            lines.append(f"- [{project_id}] Status: {tag}")
+
+    return "\n".join(lines)
 
 
 def _build_tool_catalog() -> str:
@@ -150,5 +192,11 @@ class StartHereTool(Tool, ToolMarkerDoesNotRequireActiveProject):
         sections.append(f"ACTIVE CONFIGURATION\n{config_overview}")
         if activation_note:
             sections.append(activation_note)
+
+        # Actionable setup notes — only emitted when something needs fixing.
+        if workspace is not None:
+            setup_notes = _build_setup_notes(workspace)
+            if setup_notes:
+                sections.append(f"SETUP NOTES\n{setup_notes}")
 
         return "\n\n---\n\n".join(sections)

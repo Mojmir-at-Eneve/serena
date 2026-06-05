@@ -337,55 +337,87 @@ class SerenaWorkspace:
 
     def health_summary(self) -> str:
         """
-        Returns a concise multi-line status string covering all project units,
-        their languages, language-server health, and any degraded states.
-        Includes "Activated project" phrasing for backward-compatible test/client checks.
+        Returns a concise workspace status string.
+
+        Only units that require attention are listed individually:
+        - LS_ERROR: language server failed to start
+        - DEGRADED: some languages failed
+        - OK (no source files indexed): LS started but found nothing to index
+
+        Healthy units (OK with source files) are collapsed into a single count
+        line to keep the output scannable. Includes "Activated project" phrasing
+        for backward-compatible test/client checks.
         """
         unit_names = ", ".join(u.project.project_name for u in self._units)
         lines: list[str] = [
             f"Activated project workspace: {self.workspace_root}",
             f"Projects ({len(self._units)}): {unit_names}",
         ]
+
+        ok_count = 0
+        attention_lines: list[str] = []
+
         for unit in self._units:
             proj = unit.project
             languages = [l.value for l in proj.project_config.languages]
             ls_mgr = proj.language_server_manager
+            rel = unit.workspace_relative_path or "(root)"
 
-            status_parts: list[str] = []
             if ls_mgr is None:
-                # Language-server manager may still be initialising.
+                # Language-server manager may still be initialising or errored.
                 if proj._language_server_manager_init_error is not None:
-                    status_parts.append(
-                        f"LS_ERROR: {proj._language_server_manager_init_error}"
+                    attention_lines.append(
+                        f"  [{unit.project_id}] {rel}  languages={languages}"
+                        f"  LS_ERROR: {proj._language_server_manager_init_error}"
                     )
                 else:
-                    status_parts.append("LS_INITIALISING")
+                    attention_lines.append(
+                        f"  [{unit.project_id}] {rel}  languages={languages}  LS_INITIALISING"
+                    )
             else:
                 active_langs = [l.value for l in ls_mgr.get_active_languages()]
-                failed_langs = [
-                    l.value for l in ls_mgr.get_failed_languages()
-                ]
+                failed_langs = [l.value for l in ls_mgr.get_failed_languages()]
                 if failed_langs:
-                    status_parts.append(f"DEGRADED (failed: {', '.join(failed_langs)})")
+                    attention_lines.append(
+                        f"  [{unit.project_id}] {rel}  languages={languages}"
+                        f"  DEGRADED (failed: {', '.join(failed_langs)})"
+                    )
+                elif not _has_indexable_source_files(proj, active_langs):
+                    attention_lines.append(
+                        f"  [{unit.project_id}] {rel}  languages={languages}"
+                        "  OK (no source files indexed — LS started but found no indexable source)"
+                    )
                 else:
-                    # LS can report OK on marker-only repos (e.g. .sln without .cs); flag empty indexes.
-                    if _has_indexable_source_files(proj, active_langs):
-                        status_parts.append("OK")
-                    else:
-                        status_parts.append(
-                            "OK (no source files indexed — LS started but found no indexable source)"
-                        )
-                if active_langs:
-                    status_parts.append(f"active_ls={active_langs}")
+                    # Healthy — aggregate rather than list individually.
+                    ok_count += 1
 
-            rel = unit.workspace_relative_path or "(root)"
-            lines.append(
-                f"  [{unit.project_id}] {rel}"
-                f"  languages={languages}"
-                f"  {' '.join(status_parts)}"
-            )
+        if ok_count:
+            lines.append(f"  {ok_count} project unit(s) OK (language servers running)")
+        lines.extend(attention_lines)
 
         return "\n".join(lines)
+
+    def attention_units(self) -> list[tuple[str, str]]:
+        """
+        Return (project_id, status_tag) pairs for units that need attention.
+
+        Status tags: 'LS_ERROR', 'DEGRADED', 'NO_SOURCE'.
+        Healthy OK units are excluded. Used by start_here to build SETUP NOTES.
+        """
+        result: list[tuple[str, str]] = []
+        for unit in self._units:
+            proj = unit.project
+            ls_mgr = proj.language_server_manager
+            if ls_mgr is None:
+                tag = "LS_ERROR" if proj._language_server_manager_init_error else "LS_INITIALISING"
+                result.append((unit.project_id, tag))
+            else:
+                active_langs = [l.value for l in ls_mgr.get_active_languages()]
+                if ls_mgr.get_failed_languages():
+                    result.append((unit.project_id, "DEGRADED"))
+                elif not _has_indexable_source_files(proj, active_langs):
+                    result.append((unit.project_id, "NO_SOURCE"))
+        return result
 
 
 def _source_extensions_for_language_values(language_values: list[str]) -> frozenset[str]:
