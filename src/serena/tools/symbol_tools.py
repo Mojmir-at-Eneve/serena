@@ -314,8 +314,9 @@ class FindUsagesTool(Tool, ToolMarkerSymbolicRead):
     # noinspection PyDefaultArgument
     def apply(
         self,
-        name_path: str,
         relative_path: str,
+        name_path: str = "",
+        name_path_pattern: str = "",
         include_kinds: list[int] = [],  # noqa: B006
         exclude_kinds: list[int] = [],  # noqa: B006
         max_answer_chars: int = -1,
@@ -326,7 +327,19 @@ class FindUsagesTool(Tool, ToolMarkerSymbolicRead):
         Each result includes the name path and location of the referencing symbol
         plus a short code snippet around the actual reference site.
 
-        :param name_path: name path of the symbol to find usages for.
+        **Naming note** — ``name_path`` vs ``name_path_pattern``:
+        ``find_symbol`` accepts a *pattern* (substring / glob-style matching).
+        This tool requires an *exact* name path that identifies one specific symbol
+        (e.g. ``"MyClass/MyMethod[2]"``).  To avoid confusion, both ``name_path``
+        and ``name_path_pattern`` are accepted here and treated identically — use
+        whichever matches the name you are already working with.
+
+        :param name_path: exact name path of the symbol whose usages are sought.
+            Accepts overload disambiguation suffixes such as ``[n]``, ``@line:N``,
+            or ``(partial_sig)``.  Alias: ``name_path_pattern``.
+        :param name_path_pattern: alias for ``name_path``; use when the name path
+            was obtained from a ``find_symbol`` call and copying the parameter name
+            is more natural.  If both are provided, ``name_path`` takes precedence.
         :param relative_path: file containing the symbol. For external dependency symbols,
             use the <ext...> identifier returned by earlier tool calls.
         :param include_kinds: limit results to these LSP symbol kind integers.
@@ -334,6 +347,12 @@ class FindUsagesTool(Tool, ToolMarkerSymbolicRead):
         :param max_answer_chars: cap on result size; -1 uses the configured default.
         :return: referencing symbols grouped by file and kind, with code snippets.
         """
+        # Resolve alias: name_path wins; fall back to name_path_pattern.
+        resolved_name_path = name_path or name_path_pattern
+        if not resolved_name_path:
+            return "Error: provide either name_path or name_path_pattern."
+        name_path = resolved_name_path
+
         parsed_include_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in include_kinds] if include_kinds else None
         parsed_exclude_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in exclude_kinds] if exclude_kinds else None
         unit, proj_rel = self.resolve_project(relative_path)
