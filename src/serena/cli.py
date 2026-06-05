@@ -13,7 +13,8 @@ name.  If omitted, Serena auto-detects the project from the current working
 directory (.serena/project.yml or .git).
 
 Tool subcommands mirror the MCP surface exactly:
-  start-here, manage-project, search-and-replace,
+  start-here, manage-project,
+  search, search-regex, search-and-replace, search-and-replace-regex,
   run-command, run-project-command, manage-project-commands,
   symbols-overview, find-symbol, find-usages, find-implementations,
   find-definition, check-errors, check-symbol-errors,
@@ -232,16 +233,69 @@ def cmd_manage_project(ctx: click.Context, action: str, project: str) -> None:
     _run_tool_cli(agent, ManageProjectTool, action=action, project=project)
 
 
+@top_level.command("search")
+@click.argument("pattern")
+@click.option("--path", "relative_path", default="", help="Restrict to this file or directory.")
+@click.option("--include", default="", help="Glob pattern to include files (e.g. 'src/**/*.py').")
+@click.option("--exclude", default="", help="Glob pattern to exclude files.")
+@click.option("--context", "context_lines", type=int, default=2, show_default=True, help="Context lines around each match.")
+@click.pass_context
+def cmd_search(
+    ctx: click.Context,
+    pattern: str,
+    relative_path: str,
+    include: str,
+    exclude: str,
+    context_lines: int,
+) -> None:
+    """Search for an exact text string across project files (read-only)."""
+    from serena.tools.file_tools import SearchTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(
+        agent,
+        SearchTool,
+        pattern=pattern,
+        relative_path=relative_path,
+        include=include,
+        exclude=exclude,
+        context_lines=context_lines,
+    )
+
+
+@top_level.command("search-regex")
+@click.argument("pattern")
+@click.option("--path", "relative_path", default="", help="Restrict to this file or directory.")
+@click.option("--include", default="", help="Glob pattern to include files (e.g. 'src/**/*.py').")
+@click.option("--exclude", default="", help="Glob pattern to exclude files.")
+@click.option("--context", "context_lines", type=int, default=2, show_default=True, help="Context lines around each match.")
+@click.pass_context
+def cmd_search_regex(
+    ctx: click.Context,
+    pattern: str,
+    relative_path: str,
+    include: str,
+    exclude: str,
+    context_lines: int,
+) -> None:
+    """Search for a Python regex pattern across project files (read-only)."""
+    from serena.tools.file_tools import SearchRegexTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(
+        agent,
+        SearchRegexTool,
+        pattern=pattern,
+        relative_path=relative_path,
+        include=include,
+        exclude=exclude,
+        context_lines=context_lines,
+    )
+
+
 @top_level.command("search-and-replace")
 @click.argument("pattern")
-@click.option("--replace", "replacement", default=None, help="Replacement text. Omit for search-only.")
-@click.option(
-    "--mode",
-    type=click.Choice(["literal", "regex"]),
-    default="literal",
-    show_default=True,
-    help="Match mode.",
-)
+@click.option("--replace", "replacement", required=True, help="Replacement text.")
 @click.option("--path", "relative_path", default="", help="Restrict to this file or directory.")
 @click.option("--include", default="", help="Glob pattern to include files (e.g. 'src/**/*.py').")
 @click.option("--exclude", default="", help="Glob pattern to exclude files.")
@@ -252,8 +306,7 @@ def cmd_manage_project(ctx: click.Context, action: str, project: str) -> None:
 def cmd_search_and_replace(
     ctx: click.Context,
     pattern: str,
-    replacement: str | None,
-    mode: str,
+    replacement: str,
     relative_path: str,
     include: str,
     exclude: str,
@@ -261,7 +314,7 @@ def cmd_search_and_replace(
     context_lines: int,
     max_preview_files: int,
 ) -> None:
-    """Search for a pattern (and optionally replace it) across project files."""
+    """Replace an exact text string across project files. Use 'search' for read-only matching."""
     from serena.tools.file_tools import SearchAndReplaceTool
 
     agent = _agent_from_ctx(ctx)
@@ -270,7 +323,45 @@ def cmd_search_and_replace(
         SearchAndReplaceTool,
         pattern=pattern,
         replacement=replacement,
-        mode=mode,
+        relative_path=relative_path,
+        include=include,
+        exclude=exclude,
+        dry_run=dry_run,
+        context_lines=context_lines,
+        max_preview_files=max_preview_files,
+    )
+
+
+@top_level.command("search-and-replace-regex")
+@click.argument("pattern")
+@click.option("--replace", "replacement", required=True, help="Replacement text; use $!1, $!2, ... for captured groups.")
+@click.option("--path", "relative_path", default="", help="Restrict to this file or directory.")
+@click.option("--include", default="", help="Glob pattern to include files (e.g. 'src/**/*.py').")
+@click.option("--exclude", default="", help="Glob pattern to exclude files.")
+@click.option("--dry-run", is_flag=True, default=False, help="Preview changes without modifying files.")
+@click.option("--context", "context_lines", type=int, default=2, show_default=True, help="Context lines around each match.")
+@click.option("--max-preview", "max_preview_files", type=int, default=3, show_default=True, help="Max files shown in dry-run preview.")
+@click.pass_context
+def cmd_search_and_replace_regex(
+    ctx: click.Context,
+    pattern: str,
+    replacement: str,
+    relative_path: str,
+    include: str,
+    exclude: str,
+    dry_run: bool,
+    context_lines: int,
+    max_preview_files: int,
+) -> None:
+    """Replace a Python regex pattern across project files. Use 'search-regex' for read-only matching."""
+    from serena.tools.file_tools import SearchAndReplaceRegexTool
+
+    agent = _agent_from_ctx(ctx)
+    _run_tool_cli(
+        agent,
+        SearchAndReplaceRegexTool,
+        pattern=pattern,
+        replacement=replacement,
         relative_path=relative_path,
         include=include,
         exclude=exclude,

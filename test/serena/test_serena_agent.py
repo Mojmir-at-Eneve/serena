@@ -24,7 +24,7 @@ from serena.tools import (
     Tool,
 )
 from serena.tools.config_tools import ManageProjectTool
-from serena.tools.file_tools import SearchAndReplaceTool
+from serena.tools.file_tools import SearchAndReplaceTool, SearchAndReplaceRegexTool, SearchRegexTool, SearchTool
 from serena.tools.symbol_tools import (
     CheckErrorsTool,
     DeleteSymbolTool,
@@ -1189,12 +1189,11 @@ class TestSerenaAgent:
         """
         relative_path = "ws_manager.js"
         with project_file_modification_context(serena_agent, relative_path):
-            replace_content_tool = serena_agent.get_tool(SearchAndReplaceTool)
+            replace_content_tool = serena_agent.get_tool(SearchAndReplaceRegexTool)
             result = replace_content_tool.apply(
                 pattern=r'catch \(error\) \{\s*console.error\("Failed to connect.*?\}',
                 replacement='catch(error) {console.log("Never mind"); }',
                 relative_path=relative_path,
-                mode="regex",
             )
             assert result.total_count > 0
 
@@ -1205,11 +1204,10 @@ class TestSerenaAgent:
         ],
         indirect=["serena_agent"],
     )
-    @pytest.mark.parametrize("mode", ["literal", "regex"], ids=["literal_mode", "regex_mode"])
-    def test_replace_content_with_backslashes(self, serena_agent: SerenaAgent, mode: Literal["literal", "regex"]):
+    def test_replace_content_with_backslashes_literal(self, serena_agent: SerenaAgent):
         """
-        Tests a content replacement where the needle and replacement strings contain backslashes.
-        This is a regression test for escaping issues.
+        Tests a literal content replacement where the needle and replacement contain backslashes.
+        Regression test for escaping issues.
         """
         relative_path = "ws_manager.js"
         needle = r'console.log("WebSocketManager initializing\nStatus OK");'
@@ -1217,10 +1215,35 @@ class TestSerenaAgent:
         replace_content_tool = serena_agent.get_tool(SearchAndReplaceTool)
         with project_file_modification_context(serena_agent, relative_path):
             result = replace_content_tool.apply(
-                pattern=re.escape(needle) if mode == "regex" else needle,
+                pattern=needle,
                 replacement=repl,
                 relative_path=relative_path,
-                mode=mode,
+            )
+            assert result.total_count > 0
+            new_content = read_project_file(serena_agent.get_active_project(), relative_path)
+            assert repl in new_content
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.TYPESCRIPT, marks=get_pytest_markers(Language.TYPESCRIPT), id="typescript_backslashes_regex"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_replace_content_with_backslashes_regex(self, serena_agent: SerenaAgent):
+        """
+        Tests a regex content replacement where the needle and replacement contain backslashes.
+        Regression test for escaping issues.
+        """
+        relative_path = "ws_manager.js"
+        needle = r'console.log("WebSocketManager initializing\nStatus OK");'
+        repl = r'console.log("WebSocketManager initialized\nAll systems go!");'
+        replace_content_tool = serena_agent.get_tool(SearchAndReplaceRegexTool)
+        with project_file_modification_context(serena_agent, relative_path):
+            result = replace_content_tool.apply(
+                pattern=re.escape(needle),
+                replacement=repl,
+                relative_path=relative_path,
             )
             assert result.total_count > 0
             new_content = read_project_file(serena_agent.get_active_project(), relative_path)
@@ -1244,7 +1267,6 @@ class TestSerenaAgent:
                 relative_path=relative_path,
                 pattern="return container",
                 replacement="return missing_container",
-                mode="literal",
             )
 
         # Result should be a SearchAndReplaceResult with at least one replacement.
@@ -1296,14 +1318,110 @@ class TestSerenaAgent:
         Tests that an ambiguous replacement where there is a larger match that internally contains
         a smaller match triggers an exception
         """
-        replace_content_tool = serena_agent.get_tool(SearchAndReplaceTool)
+        replace_content_tool = serena_agent.get_tool(SearchAndReplaceRegexTool)
         with pytest.raises(ValueError, match="ambiguous"):
             replace_content_tool.apply(
                 pattern=r'catch \(error\) \{.*?this\.updateConnectionStatus\("Connection failed", false\);.*?\}',
                 replacement='catch(error) {console.log("Never mind"); }',
                 relative_path="ws_manager.js",
-                mode="regex",
             )
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.PYTHON, marks=get_pytest_markers(Language.PYTHON), id="python_search_literal"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_search_literal_finds_matches(self, serena_agent: SerenaAgent):
+        """Tests that SearchTool finds exact text matches and returns a SearchResult."""
+        relative_path = os.path.join("test_repo", "services.py")
+        search_tool = serena_agent.get_tool(SearchTool)
+        result = search_tool.apply(
+            pattern="return container",
+            relative_path=relative_path,
+        )
+        assert result.total_count > 0
+        assert any(relative_path in path for path in result.matches)
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.PYTHON, marks=get_pytest_markers(Language.PYTHON), id="python_search_literal_no_match"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_search_literal_no_match(self, serena_agent: SerenaAgent):
+        """Tests that SearchTool returns an empty result when the pattern is not found."""
+        search_tool = serena_agent.get_tool(SearchTool)
+        result = search_tool.apply(pattern="THIS_TEXT_DOES_NOT_EXIST_ANYWHERE_12345")
+        assert result.total_count == 0
+        assert result.matches == {}
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.PYTHON, marks=get_pytest_markers(Language.PYTHON), id="python_search_regex"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_search_regex_finds_matches(self, serena_agent: SerenaAgent):
+        """Tests that SearchRegexTool finds regex matches without modifying files."""
+        relative_path = os.path.join("test_repo", "services.py")
+        search_tool = serena_agent.get_tool(SearchRegexTool)
+        result = search_tool.apply(
+            pattern=r"return\s+\w+",
+            relative_path=relative_path,
+        )
+        assert result.total_count > 0
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.PYTHON, marks=get_pytest_markers(Language.PYTHON), id="python_search_literal_metachar"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_search_literal_treats_metacharacters_as_literal(self, serena_agent: SerenaAgent):
+        """Tests that SearchTool with literal mode does not treat regex metacharacters specially."""
+        relative_path = os.path.join("test_repo", "services.py")
+        search_tool = serena_agent.get_tool(SearchTool)
+        # "return container" contains no metacharacters and should have matches;
+        # the regex "return.container" (dot = any char) also matches, but literal "return.container"
+        # (dot is a literal period) should not match, proving metacharacters are escaped.
+        result_with_dot_literal = search_tool.apply(pattern="return.container", relative_path=relative_path)
+        result_no_dot = search_tool.apply(pattern="return container", relative_path=relative_path)
+        # "return container" (space) should match; "return.container" (literal dot) should not
+        assert result_no_dot.total_count > 0
+        assert result_with_dot_literal.total_count == 0
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.PYTHON, marks=get_pytest_markers(Language.PYTHON), id="python_replace_no_replacement_redirect"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_replace_without_replacement_returns_redirect(self, serena_agent: SerenaAgent):
+        """Tests that omitting replacement on search_and_replace returns a tool-redirect error."""
+        replace_tool = serena_agent.get_tool(SearchAndReplaceTool)
+        result = replace_tool.apply(pattern="return container", replacement=None)
+        assert isinstance(result, str)
+        assert "search" in result.lower()
+
+    @pytest.mark.parametrize(
+        "serena_agent",
+        [
+            pytest.param(Language.PYTHON, marks=get_pytest_markers(Language.PYTHON), id="python_replace_regex_no_replacement_redirect"),
+        ],
+        indirect=["serena_agent"],
+    )
+    def test_replace_regex_without_replacement_returns_redirect(self, serena_agent: SerenaAgent):
+        """Tests that omitting replacement on search_and_replace_regex returns a tool-redirect error."""
+        replace_tool = serena_agent.get_tool(SearchAndReplaceRegexTool)
+        result = replace_tool.apply(pattern=r"return\s+\w+", replacement=None)
+        assert isinstance(result, str)
+        assert "search" in result.lower()
 
     @pytest.mark.parametrize("serena_agent,case", SAFE_DELETE_BLOCKED_CASES, indirect=["serena_agent"])
     def test_safe_delete_symbol_blocked_by_references(self, serena_agent: SerenaAgent, case: SafeDeleteCase):

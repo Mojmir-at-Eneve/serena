@@ -26,9 +26,11 @@ QUICK START
 1. Run start_here once per session. It activates the project and returns
    this guide plus workspace health.
 2. Explore a file: symbols_overview <file>
-3. Find code: find_symbol <pattern>  or  search_and_replace <pattern>
-4. Edit semantically: rewrite_symbol / inject_code / rename_symbol
-5. Verify: check_errors <file>  or  run_project_command test
+3. Find symbols: find_symbol <pattern>
+4. Find text: search <exact_text>  or  search_regex <pattern>
+5. Edit semantically: rewrite_symbol / inject_code / rename_symbol
+6. Replace text: search_and_replace <exact>  or  search_and_replace_regex <pattern>
+7. Verify: check_errors <file>  or  run_project_command test
 
 PATH CONVENTIONS
 All file paths are relative to the workspace root. In multi-project
@@ -42,8 +44,9 @@ EDITING STRATEGY
 Prefer symbol-level tools (rewrite_symbol, inject_code, rename_symbol) over
 text search-and-replace — they use the language server so they are accurate
 even when a symbol appears in multiple files.
-Use search_and_replace for text that does not map to a named symbol, or for
-cross-cutting changes like updating comments, strings, or config values.
+Use search / search_regex to locate text without modifying files.
+Use search_and_replace (exact) or search_and_replace_regex (Python regex)
+for cross-cutting text changes such as comments, strings, or config values.
 After any edit, call check_errors to catch new diagnostics early.
 
 SHELL COMMANDS

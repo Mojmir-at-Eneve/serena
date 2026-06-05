@@ -16,7 +16,8 @@ Serena is a **Model Context Protocol (MCP) server** that gives coding agents IDE
 
 - **Ground-truth code intelligence** — symbols, references, declarations, implementations, diagnostics (not grep guesses)
 - **Semantic editing** — replace symbol bodies, insert around symbols, rename via LSP
-- **Search and replace** — pattern-based text edits with literal/regex, dry-run, and include/exclude filters
+- **Search** — read-only text search with exact or regex matching, include/exclude filters, and context lines
+- **Search and replace** — text replacements with exact or regex mode, dry-run previews, and include/exclude filters
 - **Shell commands** — run arbitrary commands or save named project commands (test/lint/build)
 - **40+ languages** via [SolidLSP](src/solidlsp/) (open-source language servers)
 

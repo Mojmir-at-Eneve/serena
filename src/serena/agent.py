@@ -58,7 +58,7 @@ class ToolSet:
     # Legacy name mapping for tools that were renamed. Kept so that project.yml files
     # written with old tool names can still be loaded without errors.
     LEGACY_TOOL_NAME_MAPPING: dict[str, str] = {
-        "replace_regex": "search_and_replace",
+        "replace_regex": "search_and_replace_regex",
         "replace_content": "search_and_replace",
         "execute_shell_command": "run_command",
         "initial_instructions": "start_here",

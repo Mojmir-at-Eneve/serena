@@ -112,8 +112,6 @@ if __name__ == "__main__":
             lambda: search_and_replace_tool.apply(
                 pattern="value = 1",
                 replacement="value = missing_one",
-                mode="apply",
-                match_mode="literal",
             )
         )
         print(first_edit_result)
@@ -143,8 +141,6 @@ if __name__ == "__main__":
             lambda: search_and_replace_tool.apply(
                 pattern="    return value\n",
                 replacement="    other = missing_two\n    return value + other\n",
-                mode="apply",
-                match_mode="literal",
             )
         )
         print(second_edit_result)

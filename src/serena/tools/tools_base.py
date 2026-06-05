@@ -36,6 +36,30 @@ SUCCESS_RESULT = "OK"
 DEFAULT_MAX_RESULTS = 12
 
 
+def format_tool_redirect_error(
+    *,
+    tool_name: str,
+    reason: str,
+    suggestions: list[tuple[str, str]],
+) -> str:
+    """
+    Format a consistent error message directing the caller to a more appropriate tool.
+
+    Use this whenever a tool rejects a call because a different tool in the family is
+    a better fit — for example, when a replace tool is called without a replacement or
+    a search tool is asked to modify files.
+
+    :param tool_name: name of the tool that rejected the call.
+    :param reason: short explanation of why the call was rejected.
+    :param suggestions: list of (tool_name, description_of_when_to_use) pairs.
+    :return: human-readable redirect error string.
+    """
+    lines = [f"Error in {tool_name}: {reason}", "", "Try one of these tools instead:"]
+    for i, (name, when) in enumerate(suggestions, start=1):
+        lines.append(f"  {i}. {name} — {when}")
+    return "\n".join(lines)
+
+
 class ToolResult(ABC):
     """
     Structured result returned by a tool's apply() method.
