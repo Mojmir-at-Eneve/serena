@@ -23,6 +23,10 @@ from .project import Project
 log = logging.getLogger(__name__)
 NAME_PATH_SEP = "/"
 
+# Tolerance (in lines) used when matching @line:N hints. A small window handles minor
+# upstream edits that shift line numbers without invalidating the hint.
+_LINE_HINT_TOLERANCE = 2
+
 
 @dataclass
 class LanguageServerSymbolLocation:
@@ -155,18 +159,72 @@ class NamePathMatcher(ToStringMixin):
     """
 
     class PatternComponent(NamePathComponent):
+        def __init__(
+            self,
+            name: str,
+            overload_idx: int | None = None,
+            line_hint: int | None = None,
+            partial_signature: str | None = None,
+        ) -> None:
+            super().__init__(name, overload_idx)
+            # Stable disambiguation aids: alternatives to [n] that survive index shifts
+            self.line_hint = line_hint
+            self.partial_signature = partial_signature
+
         @classmethod
         def from_string(cls, component_str: str) -> Self:
+            """
+            Parse a name path component string, extracting optional disambiguation hints:
+
+              Method[n]              — 0-based overload index (existing behaviour)
+              Method@line:N          — 0-based line number hint (stable across renames)
+              Method(TypeA, TypeB)   — partial signature substring (stable, human-readable)
+
+            All three may be combined in any order after the base name.
+            """
             overload_idx = None
+            line_hint = None
+            partial_signature = None
+
+            # Parse in outermost-to-innermost order so all three forms can be combined
+            # in any arrangement on a single component string, e.g.:
+            #   "Method[1]@line:42(TypeA, TypeB)"
+            #
+            # 1. Strip trailing (partial_signature) — parentheses are not part of any
+            #    symbol name in Serena-supported languages, so this is unambiguous.
+            if component_str.endswith(")") and "(" in component_str:
+                paren_idx = component_str.rfind("(")
+                sig = component_str[paren_idx + 1 : -1].strip()
+                partial_signature = sig if sig else None
+                component_str = component_str[:paren_idx]
+
+            # 2. Strip @line:N suffix
+            if "@line:" in component_str:
+                at_idx = component_str.rfind("@line:")
+                candidate = component_str[at_idx + 6 :]
+                if candidate.isdigit():
+                    line_hint = int(candidate)
+                    component_str = component_str[:at_idx]
+
+            # 3. Strip trailing [N] overload index (innermost, parsed last)
             if component_str.endswith("]") and "[" in component_str:
                 bracket_idx = component_str.rfind("[")
                 index_part = component_str[bracket_idx + 1 : -1]
                 if index_part.isdigit():
                     component_str = component_str[:bracket_idx]
                     overload_idx = int(index_part)
-            return cls(name=component_str, overload_idx=overload_idx)
+
+            return cls(
+                name=component_str,
+                overload_idx=overload_idx,
+                line_hint=line_hint,
+                partial_signature=partial_signature,
+            )
 
         def matches(self, name_path_component: NamePathComponent, substring_matching: bool) -> bool:
+            # Name and overload-index matching (unchanged).
+            # line_hint and partial_signature are checked at the LanguageServerSymbol level
+            # in NamePathMatcher.matches_ls_symbol(), not per component.
             if substring_matching:
                 if self.name not in name_path_component.name:
                     return False
@@ -194,7 +252,22 @@ class NamePathMatcher(ToStringMixin):
         return ["_expr"]
 
     def matches_ls_symbol(self, symbol: "LanguageServerSymbol") -> bool:
-        return self.matches_reversed_components(symbol.iter_name_path_components_reversed())
+        if not self.matches_reversed_components(symbol.iter_name_path_components_reversed()):
+            return False
+        # After the component-level check passes, also evaluate any metadata hints on the
+        # deepest (innermost) pattern component.  These are only meaningful at the symbol
+        # level because they reference attributes (line, LSP detail) not present on plain
+        # NamePathComponent objects.
+        deepest = self._components[-1]
+        if deepest.line_hint is not None:
+            sym_line = symbol.line
+            if sym_line is None or abs(sym_line - deepest.line_hint) > _LINE_HINT_TOLERANCE:
+                return False
+        if deepest.partial_signature is not None:
+            sym_detail: str = symbol.symbol_root.get("detail") or ""
+            if deepest.partial_signature.lower() not in sym_detail.lower():
+                return False
+        return True
 
     def matches_reversed_components(self, components_reversed: Iterator[NamePathComponent]) -> bool:
         for i, pattern_component in enumerate(reversed(self._components)):
@@ -574,6 +647,51 @@ class ReferenceInLanguageServerSymbol(ToStringMixin):
         return self.symbol.location.relative_path
 
 
+def _format_overload_disambiguation(symbol_candidates: "list[LanguageServerSymbol]") -> str:
+    """
+    Build a disambiguation hint for a multi-candidate error that highlights only the
+    parameter tokens that *differ* between candidates.
+
+    For each candidate the full param list is extracted from the LSP ``detail`` field
+    (e.g. ``"void MyClass.Method(TypeA a, TypeB b)"``).  Parameters at positions where
+    all candidates agree are suppressed; only the distinguishing positions are shown,
+    keeping the hint concise regardless of overload arity.
+    """
+
+    def _extract_params(detail: str) -> list[str]:
+        """Return individual parameter tokens from a signature detail string."""
+        if "(" not in detail:
+            return []
+        start = detail.rfind("(")
+        end = detail.rfind(")")
+        if end <= start:
+            return []
+        return [p.strip() for p in detail[start + 1 : end].split(",") if p.strip()]
+
+    entries: list[tuple[str, int | None, list[str]]] = []
+    for s in symbol_candidates:
+        detail = s.symbol_root.get("detail") or ""
+        entries.append((s.get_name_path(), s.line, _extract_params(detail)))
+
+    # Find which param positions carry different tokens across candidates.
+    all_params = [e[2] for e in entries]
+    max_params = max((len(p) for p in all_params), default=0)
+    differing_positions: set[int] = set()
+    for i in range(max_params):
+        tokens = {p[i] if i < len(p) else "" for p in all_params}
+        if len(tokens) > 1:
+            differing_positions.add(i)
+
+    lines = []
+    for name_path, line, params in entries:
+        if differing_positions:
+            diff_tokens = [params[i] if i < len(params) else "…" for i in sorted(differing_positions)]
+            lines.append(f"  {name_path} (line {line}) — distinct params: {', '.join(diff_tokens)}")
+        else:
+            lines.append(f"  {name_path} (line {line})")
+    return "\n".join(lines)
+
+
 class LanguageServerSymbolRetriever:
     def __init__(self, project: Project) -> None:
         """
@@ -782,16 +900,18 @@ class LanguageServerSymbolRetriever:
         elif len(symbol_candidates) == 0:
             raise ValueError(f"No symbol matching '{name_path_pattern}' found")
         else:
-            # There are multiple candidates.
-            # If only one of the candidates has the given pattern as its exact name path, return that one
+            # Multiple candidates — try an exact name-path tie-break first.
             exact_matches = [s for s in symbol_candidates if s.get_name_path() == name_path_pattern]
             if len(exact_matches) == 1:
                 return exact_matches[0]
-            # otherwise, raise an error
-            include_rel_path = within_relative_path is not None
+            # Raise an error with a concise disambiguation hint that shows only the
+            # parameter tokens that differ between candidates (not the full signatures).
+            hint = _format_overload_disambiguation(symbol_candidates)
             raise ValueError(
-                f"Found multiple {len(symbol_candidates)} symbols matching '{name_path_pattern}'. "
-                "They are: \n" + json.dumps([s.to_dict(kind=True, relative_path=include_rel_path) for s in symbol_candidates], indent=2)
+                f"Found {len(symbol_candidates)} symbols matching '{name_path_pattern}'.\n"
+                "Add [n], @line:N, or (partial_sig) to the method segment to disambiguate, "
+                f"e.g. '{name_path_pattern}[0]' or '{name_path_pattern}@line:42'.\n"
+                f"Candidates:\n{hint}"
             )
 
     def find_by_location(self, location: LanguageServerSymbolLocation) -> LanguageServerSymbol | None:

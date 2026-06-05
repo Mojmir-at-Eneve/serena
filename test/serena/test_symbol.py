@@ -3,7 +3,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from serena.project import Project
-from serena.symbol import LanguageServerSymbol, LanguageServerSymbolRetriever, NamePathComponent, NamePathMatcher
+from serena.symbol import (
+    LanguageServerSymbol,
+    LanguageServerSymbolRetriever,
+    NamePathComponent,
+    NamePathMatcher,
+    _format_overload_disambiguation,
+)
 from test.solidlsp.conftest import PYTHON_BACKEND_LANGUAGES
 
 
@@ -441,3 +447,167 @@ class TestHoverBudget:
         # Global budget is 10s, all 3 should succeed
         assert call_count == 3
         assert all(info is not None for info in result.values())
+
+
+# ---------------------------------------------------------------------------
+# Tests for stable overload disambiguation: @line:N and (partial_sig) hints
+# ---------------------------------------------------------------------------
+
+
+def _make_ls_symbol(name: str, overload_idx: int | None = None, line: int | None = None, detail: str | None = None) -> LanguageServerSymbol:
+    """Build a minimal LanguageServerSymbol mock for matcher tests."""
+    sym_root: dict = {
+        "name": name,
+        "kind": 6,  # SymbolKind.Method
+        "children": [],
+    }
+    if overload_idx is not None:
+        sym_root["overload_idx"] = overload_idx
+    if line is not None:
+        sym_root["selectionRange"] = {"start": {"line": line, "character": 0}, "end": {"line": line, "character": len(name)}}
+    if detail is not None:
+        sym_root["detail"] = detail
+    return LanguageServerSymbol(sym_root)
+
+
+class TestPatternComponentParsing:
+    """Tests for @line:N and (partial_sig) parsing in PatternComponent.from_string()."""
+
+    def test_plain_name_unchanged(self):
+        pc = NamePathMatcher.PatternComponent.from_string("MyMethod")
+        assert pc.name == "MyMethod"
+        assert pc.overload_idx is None
+        assert pc.line_hint is None
+        assert pc.partial_signature is None
+
+    def test_overload_index_parsed(self):
+        pc = NamePathMatcher.PatternComponent.from_string("MyMethod[2]")
+        assert pc.name == "MyMethod"
+        assert pc.overload_idx == 2
+        assert pc.line_hint is None
+        assert pc.partial_signature is None
+
+    def test_line_hint_parsed(self):
+        pc = NamePathMatcher.PatternComponent.from_string("MyMethod@line:630")
+        assert pc.name == "MyMethod"
+        assert pc.line_hint == 630
+        assert pc.overload_idx is None
+        assert pc.partial_signature is None
+
+    def test_partial_signature_parsed(self):
+        pc = NamePathMatcher.PatternComponent.from_string("MyMethod(TypeA, TypeB)")
+        assert pc.name == "MyMethod"
+        assert pc.partial_signature == "TypeA, TypeB"
+        assert pc.line_hint is None
+        assert pc.overload_idx is None
+
+    def test_all_three_combined(self):
+        # overload index + line hint + partial signature
+        pc = NamePathMatcher.PatternComponent.from_string("MyMethod[1]@line:42(TypeA)")
+        assert pc.name == "MyMethod"
+        assert pc.overload_idx == 1
+        assert pc.line_hint == 42
+        assert pc.partial_signature == "TypeA"
+
+    def test_empty_parentheses_ignored(self):
+        # Empty parens should not produce a partial_signature
+        pc = NamePathMatcher.PatternComponent.from_string("MyMethod()")
+        assert pc.name == "MyMethod"
+        assert pc.partial_signature is None
+
+    def test_generic_name_with_line_hint(self):
+        # Generic type brackets must not interfere with line hint parsing
+        pc = NamePathMatcher.PatternComponent.from_string("CalculateRows<T>@line:54")
+        assert pc.name == "CalculateRows<T>"
+        assert pc.line_hint == 54
+        assert pc.overload_idx is None
+
+
+class TestLineHintMatching:
+    """Tests for @line:N matching in NamePathMatcher.matches_ls_symbol()."""
+
+    def _symbol_at_line(self, name: str, line: int) -> LanguageServerSymbol:
+        return _make_ls_symbol(name, line=line)
+
+    def test_exact_line_matches(self):
+        sym = self._symbol_at_line("MyMethod", 100)
+        matcher = NamePathMatcher("MyMethod@line:100", substring_matching=False)
+        assert matcher.matches_ls_symbol(sym)
+
+    def test_line_within_tolerance_matches(self):
+        sym = self._symbol_at_line("MyMethod", 101)
+        matcher = NamePathMatcher("MyMethod@line:100", substring_matching=False)
+        assert matcher.matches_ls_symbol(sym)
+
+    def test_line_outside_tolerance_does_not_match(self):
+        sym = self._symbol_at_line("MyMethod", 200)
+        matcher = NamePathMatcher("MyMethod@line:100", substring_matching=False)
+        assert not matcher.matches_ls_symbol(sym)
+
+    def test_no_line_hint_matches_any_line(self):
+        sym = self._symbol_at_line("MyMethod", 999)
+        matcher = NamePathMatcher("MyMethod", substring_matching=False)
+        assert matcher.matches_ls_symbol(sym)
+
+
+class TestPartialSignatureMatching:
+    """Tests for (partial_sig) matching in NamePathMatcher.matches_ls_symbol()."""
+
+    def _symbol_with_detail(self, name: str, detail: str) -> LanguageServerSymbol:
+        return _make_ls_symbol(name, detail=detail)
+
+    def test_partial_sig_present_in_detail_matches(self):
+        sym = self._symbol_with_detail("Calculate", detail="List<T> Calculate(CalculationData data, List<T> rows)")
+        matcher = NamePathMatcher("Calculate(CalculationData data)", substring_matching=False)
+        assert matcher.matches_ls_symbol(sym)
+
+    def test_partial_sig_absent_in_detail_does_not_match(self):
+        sym = self._symbol_with_detail("Calculate", detail="List<T> Calculate(Invoice invoice)")
+        matcher = NamePathMatcher("Calculate(CalculationData data)", substring_matching=False)
+        assert not matcher.matches_ls_symbol(sym)
+
+    def test_partial_sig_is_case_insensitive(self):
+        sym = self._symbol_with_detail("Calculate", detail="List<T> Calculate(CalculationData data)")
+        matcher = NamePathMatcher("Calculate(calculationdata data)", substring_matching=False)
+        assert matcher.matches_ls_symbol(sym)
+
+    def test_no_detail_field_does_not_match_nonempty_sig(self):
+        sym = _make_ls_symbol("Calculate")  # no detail
+        matcher = NamePathMatcher("Calculate(TypeA)", substring_matching=False)
+        assert not matcher.matches_ls_symbol(sym)
+
+
+class TestOverloadDisambiguationMessage:
+    """Tests for the _format_overload_disambiguation helper."""
+
+    def _build_candidate(self, name: str, line: int, detail: str) -> LanguageServerSymbol:
+        return _make_ls_symbol(name, line=line, detail=detail)
+
+    def test_shows_differing_param_tokens(self):
+        candidates = [
+            self._build_candidate("Calculate", 10, "void Calculate(CalculationData data, List<T> rows)"),
+            self._build_candidate("Calculate", 20, "void Calculate(Invoice invoice, List<T> rows)"),
+        ]
+        result = _format_overload_disambiguation(candidates)
+        # Should mention the differing first param, not the shared second param
+        assert "CalculationData" in result or "Invoice" in result
+        # Should NOT repeat shared "List<T> rows" for both
+        assert result.count("rows") <= 1 or "rows" not in result.split("distinct params:")[-1].split("\n")[0]
+
+    def test_includes_name_path_and_line(self):
+        candidates = [
+            self._build_candidate("MyMethod", 42, "void MyMethod(TypeA a)"),
+            self._build_candidate("MyMethod", 55, "void MyMethod(TypeB b)"),
+        ]
+        result = _format_overload_disambiguation(candidates)
+        assert "42" in result
+        assert "55" in result
+
+    def test_no_params_falls_back_to_line_only(self):
+        candidates = [
+            self._build_candidate("MyMethod", 10, "no parens here"),
+            self._build_candidate("MyMethod", 20, "also no parens"),
+        ]
+        result = _format_overload_disambiguation(candidates)
+        assert "10" in result
+        assert "20" in result
