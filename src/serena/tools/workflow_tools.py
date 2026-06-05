@@ -69,6 +69,15 @@ Use search_and_replace (exact) or search_and_replace_regex (Python regex)
 for cross-cutting text changes such as comments, strings, or config values.
 After any edit, call check_errors to catch new diagnostics early.
 
+OVERLOAD DISAMBIGUATION (C#, Java, …)
+When a symbol name has multiple overloads, append one of the following to the
+method segment in name_path to select the right one:
+  Class/Method[n]              — 0-based index (use find_symbol depth:1 to discover)
+  Class/Method@line:42         — 0-based line of the identifier (stable across renames)
+  Class/Method(TypeA, TypeB)   — substring of the LSP signature (stable, human-readable)
+Use rename_symbol with dry_run=True to confirm the target before applying.
+Re-run find_symbol(depth:1) after each rename — indices shift when overloads are removed.
+
 SHELL COMMANDS
 Use run_command for one-off shell operations (build, test, git, etc.).
 Save recurring commands with manage_project_commands so they are callable by

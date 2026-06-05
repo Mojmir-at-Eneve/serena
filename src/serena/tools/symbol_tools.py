@@ -730,21 +730,36 @@ class RenameSymbolTool(Tool, ToolMarkerSymbolicEdit):
         name_path: str,
         relative_path: str,
         new_name: str,
+        dry_run: bool = False,
     ) -> str:
         """
         Rename a symbol and all its references across the codebase.
 
-        For overloaded methods (e.g. in Java), include the full signature in
-        name_path to uniquely identify the overload.
+        To target a specific overload in languages like C# or Java, append a
+        0-based index to the method segment: ``ClassName/MethodName[0]``.
 
-        :param name_path: name path of the symbol to rename.
+        Two stable alternatives that survive index shifts between renames:
+          - Line hint:         ``MethodName@line:42``   (0-based line of the identifier)
+          - Partial signature: ``MethodName(TypeA, TypeB)`` (substring of the LSP signature)
+
+        All three forms may be combined with the method name:
+        ``MethodName[0]``, ``MethodName@line:42``, ``MethodName(TypeA)``.
+
+        Set ``dry_run=True`` to verify the correct overload is targeted before
+        committing — resolves the symbol and returns its info without renaming.
+
+        :param name_path: name path of the symbol to rename. Append ``[n]``,
+            ``@line:N``, or ``(partial_sig)`` to the method segment for overloads.
         :param relative_path: file containing the symbol.
         :param new_name: the new name to give the symbol.
-        :return: result summary indicating how many references were updated.
+        :param dry_run: if True, resolve the target symbol and return its info
+            without applying the rename.
+        :return: resolved symbol info (name path, line, detail) plus — when
+            dry_run is False — the number of references updated.
         """
         unit, proj_rel = self.resolve_project(relative_path)
         code_editor = self.create_ls_code_editor_for(unit.project)
-        status_message = code_editor.rename_symbol(name_path, relative_path=proj_rel, new_name=new_name)
+        status_message = code_editor.rename_symbol(name_path, relative_path=proj_rel, new_name=new_name, dry_run=dry_run)
         return status_message
 
 
