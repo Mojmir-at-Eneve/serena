@@ -647,6 +647,48 @@ class ReferenceInLanguageServerSymbol(ToStringMixin):
         return self.symbol.location.relative_path
 
 
+def _extract_params_from_detail(detail: str) -> list[str]:
+    """Extract individual parameter tokens from a signature detail string.
+
+    Looks for the last ``(...)`` block, then splits by comma — good enough for
+    C# / Java method signatures coming from OmniSharp / JDTLS.
+    """
+    if "(" not in detail:
+        return []
+    start = detail.rfind("(")
+    end = detail.rfind(")")
+    if end <= start:
+        return []
+    return [p.strip() for p in detail[start + 1 : end].split(",") if p.strip()]
+
+
+def _compute_overload_distinct_params(symbol_group: "list[LanguageServerSymbol]") -> "list[list[str]]":
+    """
+    For each symbol in a group of overloads, return the parameter tokens at
+    positions that *differ* from the other members.
+
+    Returns one list per symbol (same order as ``symbol_group``).  If no
+    ``detail`` field is available, returns empty lists for every member.
+    """
+    all_params = [_extract_params_from_detail(s.symbol_root.get("detail") or "") for s in symbol_group]
+    max_params = max((len(p) for p in all_params), default=0)
+
+    differing_positions: set[int] = set()
+    for i in range(max_params):
+        tokens = {p[i] if i < len(p) else "" for p in all_params}
+        if len(tokens) > 1:
+            differing_positions.add(i)
+
+    result = []
+    for params in all_params:
+        if differing_positions:
+            distinct = [params[i] if i < len(params) else "…" for i in sorted(differing_positions)]
+        else:
+            distinct = []
+        result.append(distinct)
+    return result
+
+
 def _format_overload_disambiguation(symbol_candidates: "list[LanguageServerSymbol]") -> str:
     """
     Build a disambiguation hint for a multi-candidate error that highlights only the
@@ -657,36 +699,13 @@ def _format_overload_disambiguation(symbol_candidates: "list[LanguageServerSymbo
     all candidates agree are suppressed; only the distinguishing positions are shown,
     keeping the hint concise regardless of overload arity.
     """
-
-    def _extract_params(detail: str) -> list[str]:
-        """Return individual parameter tokens from a signature detail string."""
-        if "(" not in detail:
-            return []
-        start = detail.rfind("(")
-        end = detail.rfind(")")
-        if end <= start:
-            return []
-        return [p.strip() for p in detail[start + 1 : end].split(",") if p.strip()]
-
-    entries: list[tuple[str, int | None, list[str]]] = []
-    for s in symbol_candidates:
-        detail = s.symbol_root.get("detail") or ""
-        entries.append((s.get_name_path(), s.line, _extract_params(detail)))
-
-    # Find which param positions carry different tokens across candidates.
-    all_params = [e[2] for e in entries]
-    max_params = max((len(p) for p in all_params), default=0)
-    differing_positions: set[int] = set()
-    for i in range(max_params):
-        tokens = {p[i] if i < len(p) else "" for p in all_params}
-        if len(tokens) > 1:
-            differing_positions.add(i)
-
+    distinct_per_sym = _compute_overload_distinct_params(symbol_candidates)
     lines = []
-    for name_path, line, params in entries:
-        if differing_positions:
-            diff_tokens = [params[i] if i < len(params) else "…" for i in sorted(differing_positions)]
-            lines.append(f"  {name_path} (line {line}) — distinct params: {', '.join(diff_tokens)}")
+    for s, distinct_params in zip(symbol_candidates, distinct_per_sym, strict=True):
+        name_path = s.get_name_path()
+        line = s.line
+        if distinct_params:
+            lines.append(f"  {name_path} (line {line}) — distinct params: {', '.join(distinct_params)}")
         else:
             lines.append(f"  {name_path} (line {line})")
     return "\n".join(lines)

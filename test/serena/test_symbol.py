@@ -8,6 +8,7 @@ from serena.symbol import (
     LanguageServerSymbolRetriever,
     NamePathComponent,
     NamePathMatcher,
+    _compute_overload_distinct_params,
     _format_overload_disambiguation,
 )
 from test.solidlsp.conftest import PYTHON_BACKEND_LANGUAGES
@@ -611,3 +612,74 @@ class TestOverloadDisambiguationMessage:
         result = _format_overload_disambiguation(candidates)
         assert "10" in result
         assert "20" in result
+
+
+class TestComputeOverloadDistinctParams:
+    """Tests for the _compute_overload_distinct_params helper."""
+
+    def _sym(self, detail: str) -> LanguageServerSymbol:
+        return _make_ls_symbol("Method", detail=detail)
+
+    def test_single_differing_position(self):
+        syms = [
+            self._sym("void M(TypeA a, List<T> rows)"),
+            self._sym("void M(TypeB b, List<T> rows)"),
+        ]
+        result = _compute_overload_distinct_params(syms)
+        assert len(result) == 2
+        # Only the first param differs; second ("List<T> rows") is shared
+        assert any("TypeA" in p for p in result[0])
+        assert any("TypeB" in p for p in result[1])
+        # Shared param should not appear
+        assert not any("rows" in p for p in result[0])
+
+    def test_all_params_differ(self):
+        syms = [
+            self._sym("void M(TypeA a)"),
+            self._sym("void M(TypeB b)"),
+        ]
+        result = _compute_overload_distinct_params(syms)
+        assert result[0] == ["TypeA a"]
+        assert result[1] == ["TypeB b"]
+
+    def test_identical_params_returns_empty_lists(self):
+        syms = [
+            self._sym("void M(TypeA a)"),
+            self._sym("void M(TypeA a)"),
+        ]
+        result = _compute_overload_distinct_params(syms)
+        # No positional difference — both get empty distinct lists
+        assert result[0] == []
+        assert result[1] == []
+
+    def test_no_params_returns_empty_lists(self):
+        syms = [
+            self._sym("void M()"),
+            self._sym("void M()"),
+        ]
+        result = _compute_overload_distinct_params(syms)
+        assert result == [[], []]
+
+    def test_different_arity_shows_placeholder(self):
+        syms = [
+            self._sym("void M(TypeA a, TypeB b)"),
+            self._sym("void M(TypeA a)"),
+        ]
+        result = _compute_overload_distinct_params(syms)
+        # Position 1 differs (TypeB b vs missing)
+        assert any("TypeB" in p for p in result[0])
+        assert any("…" in p for p in result[1])
+
+    def test_format_overload_disambiguation_uses_same_logic(self):
+        """_format_overload_disambiguation should delegate to _compute_overload_distinct_params."""
+        from serena.symbol import _format_overload_disambiguation
+
+        syms = [
+            _make_ls_symbol("M", line=1, detail="void M(TypeA a)"),
+            _make_ls_symbol("M", line=2, detail="void M(TypeB b)"),
+        ]
+        fmt_result = _format_overload_disambiguation(syms)
+        distinct = _compute_overload_distinct_params(syms)
+        # Both helpers must agree on which tokens are distinct
+        assert distinct[0][0] in fmt_result
+        assert distinct[1][0] in fmt_result

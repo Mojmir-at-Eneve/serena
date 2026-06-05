@@ -20,7 +20,9 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from serena.symbol import LanguageServerSymbol, LanguageServerSymbolDictGrouper
+import re as _re
+
+from serena.symbol import LanguageServerSymbol, LanguageServerSymbolDictGrouper, _compute_overload_distinct_params
 from serena.tools.tools_base import (
     SUCCESS_RESULT,
     EditingToolWithDiagnostics,
@@ -164,6 +166,11 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         - a relative path ("MyClass/my_method") — matches any symbol with that name path suffix
         - an absolute path ("/MyClass/my_method") — requires an exact full match
 
+        Overloaded symbols are automatically annotated with an ``overload_info`` block
+        that shows the overload index, how many siblings appear in this result set, and
+        the parameter tokens that distinguish each overload from the others.  Use
+        ``depth:1`` on a class to discover its full overload inventory before renaming.
+
         :param name_path_pattern: the pattern to match against symbol name paths.
         :param depth: child depth to include (1 = immediate children such as methods of a class).
             Ignored when include_body is True.
@@ -177,6 +184,7 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         :param max_matches: maximum matches to return; -1 for unlimited. Default 12.
         :param max_answer_chars: cap on result size; -1 uses the configured default.
         :return: matching symbols with their locations (and optionally bodies or info).
+            Overloaded symbols carry an additional ``overload_info`` key.
         """
         if include_body:
             depth = 0
@@ -227,22 +235,51 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
                 + create_short_result()
             )
 
+        # Build overload_info annotations for any overloaded symbol in the result set.
+        # Symbols sharing the same base name path (i.e. differing only in their [n] suffix)
+        # are grouped; the parameter tokens that distinguish each member from its siblings
+        # are computed and stored so callers know immediately how overloads differ.
+        overload_annotation: dict[int, dict] = {}
+        if any(s.overload_idx is not None for _, s, _ in symbols):
+            base_to_indices: dict[str, list[int]] = {}
+            for result_idx, (_, s, _) in enumerate(symbols):
+                if s.overload_idx is not None:
+                    # Strip trailing [n] to obtain the shared base path for grouping
+                    base_path = _re.sub(r"\[\d+\]$", "", s.get_name_path())
+                    base_to_indices.setdefault(base_path, []).append(result_idx)
+
+            for base_path, indices in base_to_indices.items():
+                group_syms = [symbols[i][1] for i in indices]
+                distinct_per_sym = _compute_overload_distinct_params(group_syms)
+                for list_pos, result_idx in enumerate(indices):
+                    sym = symbols[result_idx][1]
+                    info: dict = {
+                        "index": sym.overload_idx,
+                        "total_in_results": len(indices),
+                    }
+                    if distinct_per_sym[list_pos]:
+                        info["distinguishing_params"] = distinct_per_sym[list_pos]
+                    overload_annotation[result_idx] = info
+
         symbol_dicts = []
-        for proj_id, s, _ in symbols:
-            d = s.to_dict(
-                kind=True,
-                name_path=True,
-                name=False,
-                relative_path=True,
-                body_location=True,
-                depth=depth,
-                body=include_body,
-                children_name=True,
-                children_name_path=False,
+        for result_idx, (proj_id, s, _) in enumerate(symbols):
+            d = dict(
+                s.to_dict(
+                    kind=True,
+                    name_path=True,
+                    name=False,
+                    relative_path=True,
+                    body_location=True,
+                    depth=depth,
+                    body=include_body,
+                    children_name=True,
+                    children_name_path=False,
+                )
             )
-            if ws.is_multi_project and "relative_path" in d and d["relative_path"]:
-                d = dict(d)
+            if ws.is_multi_project and d.get("relative_path"):
                 d["relative_path"] = ws.label(proj_id, d["relative_path"])
+            if result_idx in overload_annotation:
+                d["overload_info"] = overload_annotation[result_idx]
             symbol_dicts.append(d)
 
         if not include_body and include_info:
