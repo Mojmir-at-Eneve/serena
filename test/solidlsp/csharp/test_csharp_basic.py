@@ -138,6 +138,27 @@ class TestCSharpLanguageServer:
         assert any("Calculator" in name for name in names), f"Expected 'Calculator' in results, got: {names}"
 
     @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_type_definition(self, language_server: SolidLanguageServer) -> None:
+        """Test that typeDefinition resolves a variable to its type's definition.
+
+        In Models/Person.cs line 30: `var calculator = new Calculator();`
+        The variable `calculator` has type `Calculator`; typeDefinition should
+        navigate to the Calculator class defined in Program.cs.
+        """
+        file_path = os.path.join("Models", "Person.cs")
+        language_server.open_file(file_path)
+
+        # 0-indexed line 29 = file line 30: `            var calculator = new Calculator();`
+        # `calculator` variable name starts at column 16
+        locations = language_server.request_type_definition(file_path, line=29, column=16)
+
+        assert locations, "typeDefinition should return at least one location for `calculator` variable"
+        rel_paths = [loc.get("relativePath", "") for loc in locations]
+        assert any("Program.cs" in rp for rp in rel_paths), (
+            f"typeDefinition of `calculator` (type Calculator) should point to Program.cs, got: {rel_paths}"
+        )
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
     def test_hover_includes_type_information(self, language_server: SolidLanguageServer) -> None:
         """Test that hover information is available and includes type information."""
         file_path = os.path.join("Models", "Person.cs")

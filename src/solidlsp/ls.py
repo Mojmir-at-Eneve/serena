@@ -1591,6 +1591,79 @@ class SolidLanguageServer(ABC):
         request = self.DefinitionLocationRequest(self, relative_file_path, line, column)
         return request.execute()
 
+    def _send_type_definition_request(self, params: DefinitionParams) -> Definition | list[LocationLink] | None:
+        return self.server.send.type_definition(params)
+
+    class TypeDefinitionLocationRequest(DefinitionLocationRequest):
+        """Resolves textDocument/typeDefinition — jumps to where the *type* is defined
+        rather than where the variable/symbol is declared."""
+
+        def __init__(self, language_server: "SolidLanguageServer", relative_file_path: str, line: int, column: int) -> None:
+            super().__init__(
+                language_server,
+                relative_file_path,
+                line,
+                column,
+                request_name="request_type_definition",
+            )
+
+        def send_request(self) -> object | None:
+            return self.language_server._send_type_definition_request(
+                self.language_server._create_text_document_position_params(self.relative_file_path, self.line, self.column),
+            )
+
+    def request_type_definition(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+        """
+        Raise a [textDocument/typeDefinition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+        request to the Language Server. Returns the location(s) where the *type* of the
+        symbol at the given position is defined.
+
+        Example: if the cursor is on a variable ``person`` of type ``Person``, this
+        returns the location of the ``Person`` class definition, not the variable declaration.
+
+        :param relative_file_path: file containing the usage site
+        :param line: 0-indexed line
+        :param column: 0-indexed column
+        :return: locations where the type is defined
+        """
+        request = self.TypeDefinitionLocationRequest(self, relative_file_path, line, column)
+        return request.execute()
+
+    def request_type_defining_symbol(
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+        include_body: bool = False,
+    ) -> ls_types.UnifiedSymbolInformation | None:
+        """
+        Finds the symbol that *defines the type* of the symbol at the given location.
+
+        Follows the same resolution pattern as ``request_defining_symbol`` but uses
+        ``textDocument/typeDefinition`` instead of ``textDocument/definition``.
+
+        :param relative_file_path: file containing the usage site
+        :param line: 0-indexed line
+        :param column: 0-indexed column
+        :param include_body: include the type definition's body in the result
+        :return: the type's symbol information, or None if not resolved
+        """
+        if not self.server_started:
+            log.error("request_type_defining_symbol called before language server started")
+            raise SolidLSPException("Language Server not started")
+
+        locations = self.request_type_definition(relative_file_path, line, column)
+        if not locations:
+            return None
+
+        definition = self._get_preferred_definition(locations)
+        def_path = definition["relativePath"]
+        if def_path is None:
+            return None
+        def_line = definition["range"]["start"]["line"]
+        def_col = definition["range"]["start"]["character"]
+        return self._request_symbol_at_location(def_path, def_line, def_col, include_body=include_body)
+
     def _send_implementation_request(self, implementation_params: ImplementationParams) -> Definition | list[LocationLink] | None:
         return self.server.send.implementation(implementation_params)
 

@@ -1107,6 +1107,37 @@ class LanguageServerSymbolRetriever:
             return None
         return LanguageServerSymbol(defining_symbol)
 
+    def find_type_definition(
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+        include_body: bool = False,
+    ) -> LanguageServerSymbol | None:
+        """
+        Find where the *type* of the symbol at the given position is defined.
+
+        Useful when an agent wants to navigate from a variable or parameter to its
+        class/interface definition rather than to the variable declaration.
+        Example: for ``Person p``, this returns the ``Person`` class definition.
+
+        :param relative_file_path: file containing the usage site.
+        :param line: 0-based line number of the usage.
+        :param column: 0-based column number of the usage.
+        :param include_body: include the type definition's body in the result.
+        :return: the symbol where the type is defined, or None if not resolved.
+        """
+        lang_server = self.get_language_server(relative_file_path)
+        type_symbol = lang_server.request_type_defining_symbol(
+            relative_file_path=relative_file_path,
+            line=line,
+            column=column,
+            include_body=include_body,
+        )
+        if type_symbol is None:
+            return None
+        return LanguageServerSymbol(type_symbol)
+
     def get_file_diagnostics(
         self,
         relative_file_path: str,

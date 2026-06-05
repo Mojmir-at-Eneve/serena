@@ -524,6 +524,9 @@ class CSharpLanguageServer(SolidLanguageServer):
                             },
                         },
                         "definition": {"dynamicRegistration": True},
+                        # textDocument/typeDefinition: navigate to the type that defines a symbol's
+                        # type (e.g. variable of type Person → Person class definition).
+                        "typeDefinition": {"dynamicRegistration": True, "linkSupport": True},
                         "references": {"dynamicRegistration": True},
                         "documentSymbol": {
                             "dynamicRegistration": True,

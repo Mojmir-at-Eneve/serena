@@ -583,6 +583,119 @@ class FindDefinitionTool(Tool, ToolMarkerSymbolicRead):
         return result_json
 
 
+class FindTypeDefinitionTool(Tool, ToolMarkerSymbolicRead):
+    """
+    Finds where the *type* of a symbol is defined, given a usage site in a source file.
+
+    Use this when you see a symbol (variable, parameter, field) and want to navigate to
+    the class or interface that defines its type — rather than to the variable's own
+    declaration. Example: for a parameter ``Person person``, this jumps to the ``Person``
+    class definition.
+
+    This is especially useful when exploring method signatures: call find_definition to
+    locate the method, then call find_type_definition on each parameter to understand
+    what types flow in and out.
+    """
+
+    def apply(
+        self,
+        relative_path: str,
+        regex: str,
+        containing_symbol_name_path: str | None = None,
+        include_body: bool = False,
+        include_info: bool = False,
+    ) -> str:
+        r"""
+        Find where the *type* of a symbol at a usage site is defined.
+
+        Provide a regex with exactly one capture group isolating the symbol at its
+        usage site. The language server resolves the type of the matched symbol and
+        returns the location of that type's definition.
+
+        Example: to find the type definition of the ``person`` parameter in
+        ``void Process(Person person)``, use ``"(person)"`` or ``r"Person\s+(person)"``.
+
+        :param relative_path: file containing the usage site to resolve.
+        :param regex: regex with one capture group isolating the symbol name at its usage.
+        :param containing_symbol_name_path: optional name path of the enclosing symbol
+            to restrict the search to that symbol's body.
+        :param include_body: include the full source body of the type definition.
+        :param include_info: include hover-style info (docstring/signature) of the type definition.
+        :return: type definition location(s) with name path, file, and line.
+        """
+        relative_path = self._sanitize_input_param(relative_path)
+        regex = self._sanitize_input_param(regex)
+        unit, proj_rel = self.resolve_project(relative_path)
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
+
+        editor = self.create_ls_code_editor_for(unit.project)
+        line_offset = 0
+        if not containing_symbol_name_path:
+            content = editor.read_file(proj_rel)
+        else:
+            symbol = symbol_retriever.find_unique(name_path_pattern=containing_symbol_name_path, within_relative_path=proj_rel)
+            body_line_numbers = symbol.get_body_line_numbers_or_raise()
+            content = editor.read_file(proj_rel, lines=body_line_numbers)
+            line_offset = body_line_numbers[0]
+
+        match_coords = find_all_text_coordinates(content, regex)
+        if not match_coords:
+            raise ValueError(f"No match found for regex: {regex}")
+        if line_offset:
+            match_coords = [TextCoords(coords.line + line_offset, coords.col) for coords in match_coords]
+
+        unique_declarations: list[dict[str, Any]] = []
+        seen_declaration_sites: set[tuple[str, int]] = set()
+        for coords in match_coords:
+            type_symbol = symbol_retriever.find_type_definition(
+                relative_file_path=proj_rel,
+                line=coords.line,
+                column=coords.col,
+                include_body=include_body,
+            )
+            if type_symbol is None:
+                continue
+            declaration_relative_path = type_symbol.relative_path
+            declaration_line = type_symbol.line
+            if declaration_relative_path is None or declaration_line is None:
+                continue
+            declaration_key = (declaration_relative_path, declaration_line)
+            if declaration_key in seen_declaration_sites:
+                continue
+            seen_declaration_sites.add(declaration_key)
+
+            entry: dict[str, Any] = {
+                "relative_path": declaration_relative_path,
+                "line": declaration_line,
+            }
+            name_path = type_symbol.get_name_path()
+            if name_path:
+                entry["name_path"] = name_path
+            entry["symbol_kind"] = type_symbol.symbol_kind_name
+            if include_body and type_symbol.body is not None:
+                entry["body"] = type_symbol.body
+            if include_info:
+                if symbol_info := symbol_retriever.request_info_for_symbol(type_symbol):
+                    entry["info"] = symbol_info
+            unique_declarations.append(entry)
+
+        if not unique_declarations:
+            raise ValueError(
+                f"No type definition found for any of the {len(match_coords)} regex match(es) in {relative_path}."
+            )
+
+        total_unique = len(unique_declarations)
+        truncated = unique_declarations[:DEFAULT_MAX_RESULTS]
+        result_json = self._to_json(truncated)
+
+        if total_unique == 1:
+            return f"Found type definition.\n{result_json}"
+        if total_unique > DEFAULT_MAX_RESULTS:
+            n_more = total_unique - DEFAULT_MAX_RESULTS
+            return f"{result_json}\n... and {n_more} more. Provide a more specific regex to narrow results."
+        return result_json
+
+
 class SearchWorkspaceSymbolsTool(Tool, ToolMarkerSymbolicRead):
     """
     Fast fuzzy search for symbols across the whole workspace using the language server's
