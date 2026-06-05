@@ -82,6 +82,16 @@ class ToolResult(ABC):
     def to_cli_text(self) -> str:
         """Format the result as structured plain text for the CLI."""
 
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
+        # MCP's func_metadata inspects apply() return types via pydantic.
+        # ToolResult is not a pydantic model; declare any_schema() so pydantic
+        # accepts it without error. The MCP wire always receives str because
+        # apply_ex() normalises ToolResult → str via to_mcp_string() before sending.
+        from pydantic_core import core_schema
+
+        return core_schema.any_schema()
+
 
 class Component(ABC):
     def __init__(self, agent: "SerenaAgent"):

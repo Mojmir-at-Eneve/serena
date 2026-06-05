@@ -256,6 +256,41 @@ def test_make_tool_descriptions(docstring, expected_description) -> None:
     assert mcp_tool.description == expected_description
 
 
+def test_make_tool_tool_result_return_type() -> None:
+    """Regression test: make_mcp_tool must not crash when apply() is annotated with a ToolResult subclass.
+
+    Before the fix, MCP's func_metadata() tried to generate a pydantic schema for
+    the return type annotation of apply(). ToolResult subclasses are plain ABC
+    descendants (not pydantic models), causing PydanticSchemaGenerationError on
+    MCP server startup.
+    """
+    from serena.tools.tools_base import ToolResult
+
+    class SomeToolResult(ToolResult):
+        def to_mcp_string(self) -> str:
+            return "result"
+
+        def to_cli_text(self) -> str:
+            return "result"
+
+    class ToolResultReturnTool(BaseMockTool):
+        def apply(self, param: str) -> SomeToolResult:
+            """Test tool returning a ToolResult subclass.
+
+            :param param: Input parameter.
+            :return: A tool result object.
+            """
+            return SomeToolResult()
+
+        def apply_ex(self, *args, **kwargs) -> str:
+            return self.apply(**kwargs).to_mcp_string()
+
+    tool = ToolResultReturnTool()
+    # This must not raise PydanticSchemaGenerationError
+    mcp_tool = make_tool(tool)
+    assert isinstance(mcp_tool, MCPTool)
+
+
 def is_test_mock_class(tool_class: type) -> bool:
     """Check if a class is a test mock class."""
     # Check if the class is defined in a test module
