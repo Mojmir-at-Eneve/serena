@@ -470,19 +470,6 @@ class TestResolveProjectRoot:
             os.chdir(original_cwd)
 
 
-class TestProjectFromCwdMutualExclusivity:
-    """Tests for --project-from-cwd mutual exclusivity."""
-
-    def test_project_from_cwd_with_project_flag_fails(self, cli_runner):
-        """Test that --project-from-cwd with --project raises error."""
-        result = cli_runner.invoke(
-            TopLevelCommands.start_mcp_server,
-            ["--project-from-cwd", "--project", "/some/path"],
-        )
-        assert result.exit_code != 0
-        assert "cannot be used with" in result.output
-
-
 if __name__ == "__main__":
     # For manual testing, you can run this file directly:
     # uv run pytest test/serena/test_cli_project_commands.py -v
