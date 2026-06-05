@@ -126,7 +126,8 @@ class FindSymbolOverloadedCase(BaseCase):
 class NonUniqueSymbolReferenceCase(BaseCase):
     name_path: str
     relative_path: str
-    expected_error_fragment: str = "multiple"
+    # Error messages changed from "Found multiple…" to "Found N symbols…disambiguate"
+    expected_error_fragment: str = "disambiguate"
 
 
 @dataclass

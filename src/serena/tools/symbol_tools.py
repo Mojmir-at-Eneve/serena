@@ -62,13 +62,17 @@ class SymbolsOverviewTool(Tool, ToolMarkerSymbolicRead):
 
     symbol_dict_grouper = LanguageServerSymbolDictGrouper(["kind"], ["kind"], collapse_singleton=True)
 
-    def apply(self, relative_path: str, depth: int = 1, max_answer_chars: int = -1) -> str:
+    def apply(self, relative_path: str, depth: int = 2, max_answer_chars: int = -1) -> str:
         """
         Get a compact symbol overview of a file to understand its structure at a glance.
 
         :param relative_path: the file to inspect.
-        :param depth: how many levels of children to include. 1 = immediate children
-            (e.g. methods of a class). 0 = top-level symbols only. Default 1.
+        :param depth: how many levels of children to include.
+            0 = top-level symbols only (classes, free functions, constants).
+            1 = immediate children (methods of a class, but not their inner symbols).
+            2 = two levels deep — the default, which shows classes with methods *and*
+                any nested types or properties inside those methods.
+            Increase further only for deeply nested files.
         :param max_answer_chars: cap on result size; -1 uses the configured default.
         :return: symbols grouped by kind in a compact JSON format.
         """
@@ -97,7 +101,7 @@ class SymbolsOverviewTool(Tool, ToolMarkerSymbolicRead):
 
         return self._limit_length(result_json_str, max_answer_chars, shortened_result_factories=shortened_results)
 
-    def _get_symbol_overview(self, relative_path: str, depth: int = 1) -> list[LanguageServerSymbol.OutputDict]:
+    def _get_symbol_overview(self, relative_path: str, depth: int = 2) -> list[LanguageServerSymbol.OutputDict]:
         unit, proj_rel = self.resolve_project(relative_path)
         proj = unit.project
         symbol_retriever = self.create_language_server_symbol_retriever_for(proj)
