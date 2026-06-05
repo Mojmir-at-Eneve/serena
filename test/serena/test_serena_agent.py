@@ -1491,10 +1491,10 @@ class TestPromptProvision:
         project_name = "test_repo_python"
         session = "session1"
 
-        result1 = self._call_tool(serena_agent, ManageProjectTool, project=project_name, session_id=session)
+        result1 = self._call_tool(serena_agent, ManageProjectTool, language="python", project=project_name, session_id=session)
         self._assert_activation_message(result1, project_name)
 
-        result2 = self._call_tool(serena_agent, ManageProjectTool, project=project_name, session_id=session)
+        result2 = self._call_tool(serena_agent, ManageProjectTool, language="python", project=project_name, session_id=session)
         self._assert_activation_message(result2, project_name)
 
     def test_activate_second_project_warns_workspace_replaced(self, serena_config) -> None:
@@ -1505,8 +1505,8 @@ class TestPromptProvision:
 
         agent = SerenaAgent(project=None, serena_config=serena_config)
         try:
-            self._call_tool(agent, ManageProjectTool, project=python_path, session_id="s1")
-            result = self._call_tool(agent, ManageProjectTool, project=go_path, session_id="s2")
+            self._call_tool(agent, ManageProjectTool, language="python", project=python_path, session_id="s1")
+            result = self._call_tool(agent, ManageProjectTool, language="go", project=go_path, session_id="s2")
             assert "previously active workspace has been replaced" in result
         finally:
             agent.on_shutdown(timeout=5)
@@ -1517,7 +1517,7 @@ class TestPromptProvision:
         original_cwd = os.getcwd()
         try:
             os.chdir(repo_path)
-            result = self._call_tool(agent, ManageProjectTool, project=".", session_id="s1")
+            result = self._call_tool(agent, ManageProjectTool, language="python", project=".", session_id="s1")
             self._assert_activation_message(result, "test_repo_python")
             assert agent.get_active_project() is not None
             assert os.path.samefile(agent.get_active_project().project_root, repo_path)
@@ -1598,6 +1598,58 @@ class TestPromptProvision:
             # Scan section must not appear when workspace is already active.
             assert "NO WORKSPACE ACTIVE" not in result
             assert "DECISION" not in result
+        finally:
+            agent.on_shutdown(timeout=5)
+
+    def test_manage_project_language_required_for_mcp_schema(self, serena_config) -> None:
+        """ManageProjectTool.apply() must require language as a positional arg with no default."""
+        import inspect
+
+        sig = inspect.signature(ManageProjectTool.apply)
+        param = sig.parameters.get("language")
+        assert param is not None, "ManageProjectTool.apply() must have a 'language' parameter"
+        assert param.default is inspect.Parameter.empty, (
+            "language must be required (no default) on ManageProjectTool"
+        )
+
+    def test_manage_project_activate_threads_language_to_new_config(self, serena_config, tmp_path) -> None:
+        """Activating a path with no existing config must write the provided language
+        into the generated .serena/project.yml without running auto-detection."""
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        try:
+            result = self._call_tool(
+                agent, ManageProjectTool, language="python", action="activate",
+                project=str(tmp_path), session_id="s1",
+            )
+            assert agent.get_active_project() is not None, (
+                f"Project must be active after activate. Tool output: {result}"
+            )
+            # The generated config must contain the provided language.
+            config_path = tmp_path / ".serena" / "project.yml"
+            assert config_path.exists(), "project.yml must be created"
+            content = config_path.read_text()
+            assert "python" in content, f"Language 'python' must appear in config:\n{content}"
+        finally:
+            agent.on_shutdown(timeout=5)
+
+    def test_manage_project_activate_preserves_existing_config_language(self, serena_config, tmp_path) -> None:
+        """Activating a path that already has .serena/project.yml must not change
+        the stored language even when a different language is passed."""
+        # Write a csharp config manually.
+        serena_dir = tmp_path / ".serena"
+        serena_dir.mkdir()
+        config_path = serena_dir / "project.yml"
+        config_path.write_text("project_name: existing\nlanguages:\n  - csharp\n")
+
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        try:
+            self._call_tool(
+                agent, ManageProjectTool, language="python", action="activate",
+                project=str(tmp_path), session_id="s1",
+            )
+            # Config must still say csharp, not python.
+            content = config_path.read_text()
+            assert "csharp" in content, f"Existing language must be preserved:\n{content}"
         finally:
             agent.on_shutdown(timeout=5)
 

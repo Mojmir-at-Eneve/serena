@@ -117,12 +117,18 @@ class Project(ToStringMixin):
         project_root: str | Path,
         serena_config: "SerenaConfig",
         autogenerate: bool = True,
+        languages: "list[Language] | None" = None,
     ) -> "Project":
         assert serena_config is not None
         project_root = Path(project_root).resolve()
         if not project_root.exists():
             raise FileNotFoundError(f"Project root not found: {project_root}")
-        project_config = ProjectConfig.load(project_root, serena_config=serena_config, autogenerate=autogenerate)
+        # Pass languages through so ProjectConfig.autogenerate can skip the
+        # expensive tree-walk detection when an explicit value is provided.
+        project_config = ProjectConfig.load(
+            project_root, serena_config=serena_config, autogenerate=autogenerate,
+            languages=languages,
+        )
         return Project(project_root=str(project_root), project_config=project_config, serena_config=serena_config)
 
     def save_config(self) -> None:

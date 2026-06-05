@@ -533,13 +533,16 @@ class ProjectConfig(SharedConfig):
         return os.path.join(os.path.dirname(project_yml_path), cls.SERENA_LOCAL_PROJECT_FILE)
 
     @classmethod
-    def load(cls, project_root: Path | str, serena_config: "SerenaConfig", autogenerate: bool = False) -> Self:
+    def load(cls, project_root: Path | str, serena_config: "SerenaConfig", autogenerate: bool = False, languages: list["Language"] | None = None) -> Self:
         """
         Load a ProjectConfig instance from the path to the project root.
 
         :param project_root: the path to the project root
         :param serena_config: the global Serena configuration
         :param autogenerate: whether to auto-generate the configuration if it does not exist
+        :param languages: language(s) to use when auto-generating the configuration.
+            When provided, auto-detection is skipped entirely so no tree-walk scan runs.
+            Only meaningful when autogenerate=True and no existing config file is present.
         """
         project_root = Path(project_root)
         project_folder_name = project_root.name
@@ -549,7 +552,7 @@ class ProjectConfig(SharedConfig):
         # auto-generate if necessary
         if not os.path.exists(yaml_path):
             if autogenerate:
-                return cls.autogenerate(project_root, serena_config)
+                return cls.autogenerate(project_root, serena_config, languages=languages)
             else:
                 raise FileNotFoundError(f"Project configuration file not found: {yaml_path}")
 

@@ -27,6 +27,7 @@ from serena.project import Project
 
 if TYPE_CHECKING:
     from serena.config.serena_config import SerenaConfig
+    from solidlsp.ls_config import Language
 
 log = logging.getLogger(__name__)
 
@@ -230,6 +231,7 @@ class SerenaWorkspace:
         workspace_root: str,
         serena_config: "SerenaConfig",
         max_depth: int = _DEFAULT_MAX_DEPTH,
+        languages: "list[Language] | None" = None,
     ) -> "SerenaWorkspace":
         """
         Recursively discover Serena project units under *workspace_root* and
@@ -246,6 +248,10 @@ class SerenaWorkspace:
         3. Directories in ``_SKIP_DIRS`` or starting with ``.`` are not scanned.
         4. If no project files are found anywhere, the workspace root is
            auto-generated as a single project (preserves backward compatibility).
+
+        :param languages: language(s) to use when auto-generating .serena/project.yml
+            for directories without existing config. Passed to Project.load so that
+            auto-detection is skipped entirely when a value is supplied.
         """
         workspace_root = str(Path(workspace_root).resolve())
 
@@ -264,8 +270,11 @@ class SerenaWorkspace:
                 if registered is not None:
                     project = registered.get_project_instance(serena_config=serena_config)
                 else:
+                    # Pass languages so auto-generation uses the provided value
+                    # instead of running the expensive tree-walk language detection.
                     project = Project.load(
-                        abs_path, serena_config=serena_config, autogenerate=True
+                        abs_path, serena_config=serena_config, autogenerate=True,
+                        languages=languages,
                     )
                 units.append(
                     ProjectUnit(project=project, workspace_relative_path=ws_rel)

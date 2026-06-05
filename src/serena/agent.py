@@ -350,7 +350,7 @@ class SerenaAgent:
 
     # Keep the old name for backward compatibility (MCP tool calls this).
     def activate_project_from_path_or_name(
-        self, project_root_or_name: str, update_active_tools: bool = True
+        self, project_root_or_name: str, language: str = "", update_active_tools: bool = True
     ) -> bool:
         """
         Activate a workspace rooted at *project_root_or_name*.
@@ -358,12 +358,30 @@ class SerenaAgent:
         Accepts an absolute path to a directory, a registered project name, or
         an empty string / "." for the server cwd.  Recursively discovers
         sub-projects and wires them up as a SerenaWorkspace.
+
+        :param language: comma-separated language(s) to use when auto-generating a
+            .serena/project.yml for a directory that does not yet have one (e.g.
+            'csharp', 'python,typescript'). When empty, auto-detection is used as
+            a fallback — but providing an explicit value is strongly preferred to
+            avoid the expensive tree-walk language scan on large repositories.
         """
         # Resolve the root directory.
         root = self._resolve_workspace_root(project_root_or_name)
 
+        # Parse the language string into a typed list so discover_and_create can
+        # pass it straight through to ProjectConfig.autogenerate, skipping auto-detect.
+        languages: list[Language] | None = None
+        if language:
+            languages = [
+                Language(lang.strip())
+                for lang in language.split(",")
+                if lang.strip()
+            ]
+
         # Discover workspace (finds nested .serena/project.yml).
-        workspace = SerenaWorkspace.discover_and_create(root, self.serena_config)
+        workspace = SerenaWorkspace.discover_and_create(
+            root, self.serena_config, languages=languages
+        )
 
         # Register the primary project in global config for backward compat
         # (so it shows up in project_names etc.). Ignore if already registered.

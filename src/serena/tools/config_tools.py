@@ -7,6 +7,10 @@ intent-driven tool, replacing the former ActivateProjectTool and RemoveProjectTo
 InitializeSubprojectsTool scans a parent directory and creates a Serena
 project configuration for each immediate child that does not yet have one,
 enabling one-shot monorepo initialisation instead of per-project invocations.
+
+Both tools require an explicit `language` parameter so that agents always
+provide the language rather than triggering the expensive auto-detection
+tree-walk that was responsible for session freezes on large repositories.
 """
 
 from typing import Literal
@@ -29,6 +33,9 @@ class ManageProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
     # (session_id is injected via apply_ex)
     def apply(
         self,
+        # language must come before params with defaults to satisfy Python's
+        # non-default-after-default rule while remaining required in the MCP schema.
+        language: str,
         action: Literal["activate", "remove"] = "activate",
         project: str = "",
         session_id: str = "",
@@ -39,11 +46,16 @@ class ManageProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
         For 'activate': auto-detects the project from the server working directory when
         project is empty. Activating a parent directory discovers all nested projects as
         one workspace; activating a child path replaces any active workspace with that
-        project alone.
+        project alone. When the project directory does not yet have a .serena/project.yml,
+        the provided language is used to create the configuration without running
+        auto-detection.
 
         For 'remove': permanently removes the named project from Serena's configuration.
         The project must be referenced by its registered name.
 
+        :param language: comma-separated language(s) to use when a new project
+            configuration must be created (e.g. 'csharp', 'python,typescript').
+            Required for 'activate'. For 'remove' this parameter is accepted but unused.
         :param action: 'activate' to load a project for use, 'remove' to delete it from config.
         :param project: for 'activate' — registered project name, absolute path to the project
             directory, or empty to auto-detect from the server working directory. For 'remove' —
@@ -66,7 +78,11 @@ class ManageProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
         except ValueError as e:
             return f"Error: {e}"
 
-        is_new_activation = self.agent.activate_project_from_path_or_name(resolved_project)
+        # Pass language through so that auto-generation skips the tree-walk
+        # detection and uses the explicitly provided language directly.
+        is_new_activation = self.agent.activate_project_from_path_or_name(
+            resolved_project, language=language
+        )
         mark_used(is_new_activation)
         result = self.agent.get_project_activation_message()
         replacement_warning = self.agent.consume_last_workspace_replacement_warning()
@@ -85,15 +101,16 @@ class InitializeSubprojectsTool(Tool, ToolMarkerDoesNotRequireActiveProject):
     once per child directory.
     """
 
-    def apply(self, parent_path: str, language: str = "") -> str:
+    def apply(self, parent_path: str, language: str) -> str:
         """
         Scan immediate sub-directories of *parent_path* and create a Serena project
         config for each one that does not already have one.
 
         :param parent_path: absolute path to the parent directory whose children should be initialised.
-        :param language: optional language to apply to every sub-project (e.g. 'csharp', 'python').
-            When empty, the language is auto-detected for each child. Can specify multiple
-            languages separated by commas (e.g. 'python,typescript').
+        :param language: language(s) to apply to every sub-project (e.g. 'csharp', 'python').
+            Required — always provide an explicit value to avoid the expensive per-directory
+            language auto-detection that causes freezes on large repositories.
+            Can specify multiple languages comma-separated (e.g. 'python,typescript').
         :return: per-project summary (created / skipped / error) plus a total count line.
         """
         from serena.cli import _create_all_subprojects

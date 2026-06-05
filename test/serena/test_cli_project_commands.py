@@ -334,8 +334,19 @@ class TestProjectCreateAll:
         assert "svc_b" in result
         assert "created" in result
 
+    def test_initialize_subprojects_language_required(self, temp_project_dir):
+        """InitializeSubprojectsTool.apply() must require language — calling without
+        it must raise TypeError."""
+        import inspect
 
-class TestProjectCreateHelper:
+        from serena.tools.config_tools import InitializeSubprojectsTool
+
+        sig = inspect.signature(InitializeSubprojectsTool.apply)
+        param = sig.parameters.get("language")
+        assert param is not None, "InitializeSubprojectsTool.apply() must have a 'language' parameter"
+        assert param.default is inspect.Parameter.empty, (
+            "language must be required (no default) on InitializeSubprojectsTool"
+        )
     """Tests for _create_project helper method."""
 
     def test_create_project_helper_returns_config(self, temp_project_dir):

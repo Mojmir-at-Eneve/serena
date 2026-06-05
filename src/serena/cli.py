@@ -223,13 +223,23 @@ def cmd_start_here(ctx: click.Context) -> None:
     help="Activate a project or remove it from configuration.",
 )
 @click.option("--project", "project", default="", help="Project path or registered name.")
+@click.option(
+    "--language",
+    "language",
+    required=True,
+    help=(
+        "Comma-separated language(s) for project config creation "
+        "(e.g. 'csharp', 'python,typescript'). Required for activate; "
+        "accepted but unused for remove."
+    ),
+)
 @click.pass_context
-def cmd_manage_project(ctx: click.Context, action: str, project: str) -> None:
+def cmd_manage_project(ctx: click.Context, action: str, project: str, language: str) -> None:
     """Activate or remove a Serena project."""
     from serena.tools.config_tools import ManageProjectTool
 
     agent = _agent_from_ctx(ctx)
-    _run_tool_cli(agent, ManageProjectTool, action=action, project=project)
+    _run_tool_cli(agent, ManageProjectTool, language=language, action=action, project=project)
 
 
 @top_level.command("search")
