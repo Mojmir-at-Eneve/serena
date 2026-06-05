@@ -264,6 +264,77 @@ class TestProjectIndex:
         assert "Warning" not in result.output
 
 
+class TestProjectCreateAll:
+    """Tests for 'serena project create-all' command and its MCP tool counterpart."""
+
+    def test_create_all_initialises_unconfigured_children(self, cli_runner, temp_project_dir):
+        """create-all must create project.yml for every child that lacks one."""
+        parent = Path(temp_project_dir)
+        for child in ["alpha", "beta", "gamma"]:
+            (parent / child).mkdir()
+
+        result = cli_runner.invoke(ProjectCommands.create_all, [str(parent), "--language", "python"])
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+
+        for child in ["alpha", "beta", "gamma"]:
+            yml = parent / child / ".serena" / "project.yml"
+            assert yml.exists(), f"project.yml not created for {child}"
+
+        assert "3 created" in result.output
+        assert "0 errors" in result.output
+
+    def test_create_all_skips_already_configured_children(self, cli_runner, temp_project_dir):
+        """create-all must skip children that already have .serena/project.yml."""
+        parent = Path(temp_project_dir)
+        (parent / "already").mkdir()
+        already_serena = parent / "already" / ".serena"
+        already_serena.mkdir()
+        (already_serena / "project.yml").write_text("project_name: already\nlanguages: []\n")
+        (parent / "new").mkdir()
+
+        result = cli_runner.invoke(ProjectCommands.create_all, [str(parent), "--language", "python"])
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+        assert "skip" in result.output.lower()
+        assert "1 created" in result.output
+        assert "1 skipped" in result.output
+
+    def test_create_all_empty_parent_reports_no_subdirs(self, cli_runner, temp_project_dir):
+        """create-all on a directory with no subdirectories reports clearly."""
+        result = cli_runner.invoke(ProjectCommands.create_all, [temp_project_dir])
+        assert result.exit_code == 0
+        assert "No subdirectories" in result.output
+
+    def test_create_all_helper_returns_result_lines(self, temp_project_dir):
+        """_create_all_subprojects helper must return a list of result strings."""
+        parent = Path(temp_project_dir)
+        (parent / "svc").mkdir()
+
+        lines = ProjectCommands._create_all_subprojects(str(parent), ("python",))
+        assert any("svc" in line for line in lines), "Result must mention the child name"
+        # Summary line must be present
+        assert any("created" in line and "skipped" in line for line in lines)
+
+    def test_initialize_subprojects_mcp_tool(self, temp_project_dir):
+        """InitializeSubprojectsTool must delegate to _create_all_subprojects and
+        return a summary string."""
+        from unittest.mock import MagicMock, patch
+
+        from serena.tools.config_tools import InitializeSubprojectsTool
+
+        parent = Path(temp_project_dir)
+        for child in ["svc_a", "svc_b"]:
+            (parent / child).mkdir()
+
+        mock_agent = MagicMock()
+        tool = InitializeSubprojectsTool.__new__(InitializeSubprojectsTool)
+        tool._agent = mock_agent
+
+        result = tool.apply(parent_path=str(parent), language="python")
+        assert "svc_a" in result
+        assert "svc_b" in result
+        assert "created" in result
+
+
 class TestProjectCreateHelper:
     """Tests for _create_project helper method."""
 

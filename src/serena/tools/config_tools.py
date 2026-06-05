@@ -1,8 +1,12 @@
 """
-Project management tool for the Serena MCP toolbox.
+Project management tools for the Serena MCP toolbox.
 
 ManageProjectTool consolidates project activation and removal into a single
 intent-driven tool, replacing the former ActivateProjectTool and RemoveProjectTool.
+
+InitializeSubprojectsTool scans a parent directory and creates a Serena
+project configuration for each immediate child that does not yet have one,
+enabling one-shot monorepo initialisation instead of per-project invocations.
 """
 
 from typing import Literal
@@ -70,3 +74,31 @@ class ManageProjectTool(Tool, ToolMarkerDoesNotRequireActiveProject):
             result = f"{replacement_warning}\n\n{result}"
         result += "\nCall start_here if you have not yet initialized your session."
         return result
+
+
+class InitializeSubprojectsTool(Tool, ToolMarkerDoesNotRequireActiveProject):
+    """
+    Create Serena project configurations for all immediate child directories under a parent path.
+
+    Scans one level deep. Directories that already have a .serena/project.yml are skipped.
+    Use this to initialise an entire monorepo at once instead of calling manage_project
+    once per child directory.
+    """
+
+    def apply(self, parent_path: str, language: str = "") -> str:
+        """
+        Scan immediate sub-directories of *parent_path* and create a Serena project
+        config for each one that does not already have one.
+
+        :param parent_path: absolute path to the parent directory whose children should be initialised.
+        :param language: optional language to apply to every sub-project (e.g. 'csharp', 'python').
+            When empty, the language is auto-detected for each child. Can specify multiple
+            languages separated by commas (e.g. 'python,typescript').
+        :return: per-project summary (created / skipped / error) plus a total count line.
+        """
+        from serena.cli import _create_all_subprojects
+
+        # Parse comma-separated language string into a tuple for _create_all_subprojects.
+        languages: tuple[str, ...] = tuple(lang.strip() for lang in language.split(",") if lang.strip())
+        lines = _create_all_subprojects(parent_path, languages)
+        return "\n".join(lines)

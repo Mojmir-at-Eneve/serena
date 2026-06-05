@@ -709,6 +709,62 @@ def project_create(project_path: str, name: str | None, language: tuple[str, ...
         raise click.ClickException(str(e))
 
 
+@project_group.command("create-all")
+@click.argument("parent_path", type=click.Path(exists=True, file_okay=False), default=os.getcwd())
+@click.option("--language", type=str, multiple=True, help="Language(s) applied to every sub-project. Inferred per-project if omitted.")
+def project_create_all(parent_path: str, language: tuple[str, ...]) -> None:
+    """Create Serena project configs for all immediate child directories under PARENT_PATH.
+
+    Scans one level deep. Directories that already have .serena/project.yml are skipped.
+    Use this to initialise a monorepo in a single command instead of running
+    'project create' once per child.
+    """
+    parent = Path(parent_path).resolve()
+    results = _create_all_subprojects(str(parent), language)
+    for line in results:
+        click.echo(line)
+
+
+def _create_all_subprojects(parent_path: str, language: tuple[str, ...]) -> list[str]:
+    """Scan immediate children of *parent_path* and create a Serena project for each.
+
+    Returns a list of human-readable result lines (created / skipped / error).
+    Extracted as a standalone function so the MCP tool can reuse it without Click.
+    """
+    from serena.config.serena_config import SerenaConfig
+
+    parent = Path(parent_path).resolve()
+    serena_config = SerenaConfig.from_config_file()
+    lines: list[str] = []
+
+    try:
+        children = sorted(entry for entry in parent.iterdir() if entry.is_dir())
+    except PermissionError as exc:
+        return [f"Error: cannot read {parent}: {exc}"]
+
+    if not children:
+        return [f"No subdirectories found under {parent}."]
+
+    created = skipped = errors = 0
+    for child in children:
+        yml_path = serena_config.get_project_yml_location(str(child))
+        if os.path.exists(yml_path):
+            lines.append(f"  skip    {child.name}  (already configured)")
+            skipped += 1
+            continue
+        try:
+            _create_project(str(child), None, language)
+            lines.append(f"  created {child.name}")
+            created += 1
+        except Exception as exc:
+            lines.append(f"  error   {child.name}: {exc}")
+            errors += 1
+
+    summary = f"\nDone: {created} created, {skipped} skipped, {errors} errors."
+    lines.append(summary)
+    return lines
+
+
 @project_group.command("index")
 @click.argument("project", type=_PROJECT_TYPE, default=os.getcwd(), required=False)
 @click.option("--name", type=str, default=None, help="Project name (only if auto-creating project.yml).")
@@ -796,11 +852,16 @@ class ProjectCommands:
     """
 
     create = project_create
+    create_all = project_create_all
     index = project_index
 
     @staticmethod
     def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> RegisteredProject:
         return _create_project(project_path, name, language)
+
+    @staticmethod
+    def _create_all_subprojects(parent_path: str, language: tuple[str, ...]) -> list[str]:
+        return _create_all_subprojects(parent_path, language)
 
 
 class TopLevelCommands:
