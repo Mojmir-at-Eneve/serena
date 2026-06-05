@@ -34,8 +34,21 @@ QUICK START
 
 PATH CONVENTIONS
 All file paths are relative to the workspace root. In multi-project
-workspaces every result is prefixed [project_id:] so you can tell which
+workspaces every result is prefixed [project_id] so you can tell which
 project a symbol or match belongs to.
+
+MULTI-PROJECT WORKSPACES (monorepos)
+When multiple sub-directories each have .serena/project.yml, activating
+the parent folder loads ALL of them as one workspace. start_here lists
+every active project unit and its language-server status.
+
+Key rules:
+- Activate the PARENT (monorepo root), never individual child dirs — activating
+  a child replaces the whole workspace with that one project.
+- File paths include the sub-project folder: backend/src/Foo.cs, not src/Foo.cs.
+- Every result carries [project_id] so you always know which project owns it.
+- If a language server fails in one unit, the others keep running (degraded mode).
+- To set up: run `serena project create` in each sub-directory, then activate root.
 
 LINE NUMBERS
 All line numbers are 0-based (first line of a file is line 0).
