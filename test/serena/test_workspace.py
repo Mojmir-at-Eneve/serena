@@ -212,6 +212,46 @@ class TestSerenaWorkspaceDiscovery:
             assert not any("node_modules" in p for p in unit_paths)
             assert not any("bin" in p for p in unit_paths)
 
+    def test_discovers_six_sibling_projects(self) -> None:
+        """
+        workspace_root/
+          alpha/ .serena/project.yml
+          beta/  .serena/project.yml
+          gamma/ .serena/project.yml
+          delta/ .serena/project.yml
+          epsilon/.serena/project.yml
+          zeta/  .serena/project.yml
+
+        All six must be discovered; workspace root itself has no project.yml.
+        Verifies the intended monorepo layout with 6 real sub-projects.
+        """
+        subdirs = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+        with tempfile.TemporaryDirectory() as ws_root:
+            for name in subdirs:
+                proj_yml_dir = Path(ws_root) / name / ".serena"
+                proj_yml_dir.mkdir(parents=True)
+                (proj_yml_dir / "project.yml").write_text(
+                    f"project_name: {name}\nlanguages: []\n"
+                )
+
+            mock_serena_config = MagicMock()
+            mock_serena_config.get_registered_project.return_value = None
+
+            def mock_project_load(path, serena_config, autogenerate):
+                return _make_mock_project(str(path), Path(path).name)
+
+            with patch("serena.workspace.Project.load", side_effect=mock_project_load):
+                ws = SerenaWorkspace.discover_and_create(ws_root, mock_serena_config)
+
+            unit_paths = {u.workspace_relative_path for u in ws.units}
+            assert unit_paths == set(subdirs), (
+                f"Expected all 6 sub-projects to be discovered; got: {unit_paths}"
+            )
+            assert ws.is_multi_project
+            # Project IDs match folder names (last path component).
+            project_ids = {u.project_id for u in ws.units}
+            assert project_ids == set(subdirs)
+
     def test_single_project_fallback(self) -> None:
         """No .serena/project.yml anywhere → single root project created."""
         with tempfile.TemporaryDirectory() as ws_root:
