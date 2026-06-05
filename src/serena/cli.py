@@ -708,7 +708,9 @@ def project_group() -> None:
 def project_create(project_path: str, name: str | None, language: tuple[str, ...], index: bool, log_level: str, timeout: float) -> None:
     """Create a new Serena project configuration."""
     try:
-        registered_project = _create_project(project_path, name, language)
+        registered_project, messages = _create_project(project_path, name, language)
+        for msg in messages:
+            click.echo(msg)
         if index:
             click.echo("Indexing project...")
             _index_project(registered_project, log_level, timeout=timeout)
@@ -762,6 +764,10 @@ def _create_all_subprojects(parent_path: str, language: tuple[str, ...]) -> list
             skipped += 1
             continue
         try:
+            # Discard messages returned by _create_project — they would write to
+            # stdout if echoed, corrupting the MCP JSON protocol stream.  The
+            # per-project outcome is captured in the result lines returned by this
+            # function instead.
             _create_project(str(child), None, language)
             lines.append(f"  created {child.name}")
             created += 1
@@ -792,7 +798,9 @@ def project_index(project: str, name: str | None, language: tuple[str, ...], log
     if registered_project is None:
         click.echo(f"No existing project found for '{project}'. Attempting auto-creation ...")
         try:
-            registered_project = _create_project(project, name, language)
+            registered_project, messages = _create_project(project, name, language)
+            for msg in messages:
+                click.echo(msg)
         except Exception as e:
             raise click.ClickException(str(e))
     _index_project(registered_project, log_level, timeout=timeout)
@@ -802,7 +810,15 @@ def project_index(project: str, name: str | None, language: tuple[str, ...], log
 # Internal helpers for project create / index
 # ---------------------------------------------------------------------------
 
-def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> RegisteredProject:
+def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> tuple[RegisteredProject, list[str]]:
+    """Create a Serena project configuration and return the registered project together
+    with a list of human-readable messages (confirmation + any warnings).
+
+    Messages are returned rather than printed so that callers running inside the MCP
+    server (where stdout is the JSON protocol stream) can safely discard or forward
+    them without corrupting the transport.  CLI callers are responsible for echoing
+    the returned messages.
+    """
     project_root = Path(project_path).resolve()
     serena_config = SerenaConfig.from_config_file()
     yml_path = serena_config.get_project_yml_location(str(project_root))
@@ -826,7 +842,8 @@ def _create_project(project_path: str, name: str | None, language: tuple[str, ..
         interactive=True,
     )
     languages_str = ", ".join([lang.value for lang in generated_conf.languages]) if generated_conf.languages else "N/A"
-    click.echo(f"Generated project with languages {{{languages_str}}} at {yml_path}.")
+
+    messages: list[str] = [f"Generated project with languages {{{languages_str}}} at {yml_path}."]
 
     # Warn when immediate children already have .serena/project.yml configs.
     # Creating a root-level config on top of an existing monorepo layout can confuse
@@ -838,7 +855,7 @@ def _create_project(project_path: str, name: str | None, language: tuple[str, ..
         and (entry / SERENA_MANAGED_DIR_NAME / ProjectConfig.SERENA_PROJECT_FILE).exists()
     ]
     if child_configs:
-        click.echo(
+        messages.append(
             f"Warning: {len(child_configs)} child director{'y' if len(child_configs) == 1 else 'ies'} "
             f"already ha{'s' if len(child_configs) == 1 else 've'} .serena/project.yml "
             f"({', '.join(child_configs)}). "
@@ -851,7 +868,7 @@ def _create_project(project_path: str, name: str | None, language: tuple[str, ..
     if registered_project is None:
         registered_project = RegisteredProject(str(project_root), generated_conf)
         serena_config.add_registered_project(registered_project)
-    return registered_project
+    return registered_project, messages
 
 
 class ProjectCommands:
@@ -866,7 +883,9 @@ class ProjectCommands:
 
     @staticmethod
     def _create_project(project_path: str, name: str | None, language: tuple[str, ...]) -> RegisteredProject:
-        return _create_project(project_path, name, language)
+        # Unpack and expose only the project; messages are for CLI callers.
+        project, _ = _create_project(project_path, name, language)
+        return project
 
     @staticmethod
     def _create_all_subprojects(parent_path: str, language: tuple[str, ...]) -> list[str]:

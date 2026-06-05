@@ -347,6 +347,28 @@ class TestProjectCreateAll:
         assert param.default is inspect.Parameter.empty, (
             "language must be required (no default) on InitializeSubprojectsTool"
         )
+
+    def test_create_all_subprojects_does_not_write_to_stdout(self, temp_project_dir, capsys):
+        """_create_all_subprojects must not write anything to stdout.
+
+        The MCP server uses stdout for its JSON protocol stream; any stray
+        click.echo() output injected into that stream breaks JSON parsing and
+        causes a transport_error on the client side.  This test guards against
+        regressions where _create_project() (or any helper it calls) re-introduces
+        a direct stdout write in the non-CLI code path.
+        """
+        parent = Path(temp_project_dir)
+        for child in ["svc_x", "svc_y"]:
+            (parent / child).mkdir()
+
+        ProjectCommands._create_all_subprojects(str(parent), ("python",))
+
+        captured = capsys.readouterr()
+        assert captured.out == "", (
+            f"_create_all_subprojects must not write to stdout (MCP transport safety), "
+            f"but got: {captured.out!r}"
+        )
+
     """Tests for _create_project helper method."""
 
     def test_create_project_helper_returns_config(self, temp_project_dir):
