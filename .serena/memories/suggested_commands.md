@@ -14,7 +14,6 @@ Run via `uv run poe <task>` (or `poe <task>` inside the activated venv). Poe exe
 
 ## Entrypoints
 - `uv run serena ...` — main CLI (`serena.cli:top_level`).
-- `uv run serena-hooks ...` — hook helpers.
 - `python scripts/gen_prompt_factory.py` — regenerate `src/serena/generated/generated_prompt_factory.py` after editing prompt templates.
 
 ## Windows shell notes (PowerShell 7+ is the project shell)

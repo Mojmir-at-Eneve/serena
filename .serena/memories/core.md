@@ -24,6 +24,6 @@ Serena is an MCP-based "IDE for coding agents": semantic code retrieval/editing/
 
 - Package name (PyPI): `serena-agent`; import root: `serena`. Wheel includes `serena`, `interprompt`, `solidlsp`.
 - Python: `>=3.11, <3.15`. Dependencies are exact-pinned in `pyproject.toml` (uvx installs from git, lockfile ignored — pin exactly).
-- Entry points: `serena` → `serena.cli:top_level`; `serena-hooks` → `serena.hooks:hook_commands`.
+- Entry point: `serena` → `serena.cli:top_level`.
 - Per-project state lives under `<project>/.serena/` (config + `memories/` as `.md` files).
 - See `mem:tech_stack`, `mem:suggested_commands`, `mem:conventions`, `mem:task_completion`.

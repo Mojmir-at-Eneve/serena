@@ -57,7 +57,6 @@ explicit = true
 
 [project.scripts]
 serena = "serena.cli:top_level"
-serena-agent = "serena.cli:top_level"
 [project.license]
 text = "MIT"
 

@@ -37,14 +37,9 @@ While setting up a sandboxed environment may require some initial effort, we hig
 (network-security)=
 ## Network Security
 
-When run in [HTTP or SSE mode](streamable-http) instead of stdio, the Serena MCP server listens on a local port.
+Serena's MCP server uses **stdio** transport: the client spawns `serena start-mcp-server` as a subprocess and communicates over stdin/stdout. There is no listening port in the default setup.
 
-By default, it accepts connections from localhost only, which is a secure default for most users
-(given our assumption that the local machine is trusted; see above).
-
-These services can be reconfigured to listen on other addresses, but doing so may have security implications.
-If you need to allow connections from other machines, we recommend that you set up a secure networking environment 
-(e.g. using a VPN or SSH tunnels) and ensure that only trusted machines can connect to these services.
+If you expose Serena through an HTTP bridge (for example [MCPO](https://github.com/open-webui/mcpo) as in the [ChatGPT guide](../03-special-guides/serena_on_chatgpt)), treat that HTTP endpoint as a network service: secure it with authentication, bind to localhost where possible, and do not expose it to untrusted networks without additional protection (for example a VPN or SSH tunnel).
 
 ## Supply Chain Security
 

@@ -2,9 +2,7 @@
 
 Serena is configured through YAML files. Global settings live in `~/.serena/serena_config.yml` (created by `serena init`). Per-project settings live in `.serena/project.yml` inside each repository.
 
-Edit the global file with:
-
-    serena config edit
+Edit `~/.serena/serena_config.yml` directly, or run `serena init` to create it from the template.
 
 Project files are created by `serena project create` and can be edited directly or via your editor.
 
@@ -58,12 +56,7 @@ Serena exposes a default MCP tool set plus optional tools. Tune what the agent s
 - **Global:** `excluded_tools`, `included_optional_tools`, or `fixed_tools` in `serena_config.yml`
 - **Project:** same keys in `project.yml`
 
-List tools from the CLI:
-
-    serena tools list --all
-    serena tools description find_symbol
-
-The full catalog is documented in [Tools](../01-about/035_tools.md) (auto-generated).
+The full catalog is documented in [Tools](../01-about/035_tools.md) (auto-generated). Each MCP tool is also exposed as a CLI subcommand; run `serena --help` to list them.
 
 ## Command-line overrides
 

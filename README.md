@@ -114,19 +114,19 @@ See [Running the MCP Server](docs/02-usage/020_running.md) and [Connecting Your 
 
 Symbol navigation (`find_symbol`, `find_usages`, `find_definition`), semantic edits (`rewrite_symbol`, `inject_code`, `rename_symbol`), diagnostics (`check_errors`), search and replace, shell commands, and project management (`start_here`, `manage_project`). Optional tools (e.g. `restart_language_server`, `check_symbol_errors`) can be enabled via `included_optional_tools` in config.
 
-Run `serena tools list --all` for the full registry.
+See [Tools](docs/01-about/035_tools.md) for the full registry (auto-generated from the codebase).
 
 ## CLI
 
+Run `serena --help` for the full command list. Every MCP tool is also available as a CLI subcommand (e.g. `serena find-symbol`).
+
 | Command | Purpose |
 |---------|---------|
-| `serena start-mcp-server` | Run the MCP server |
-| `serena init` | Create global config |
+| `serena start-mcp-server` | Run the MCP server (stdio) |
+| `serena init` | Create `~/.serena/serena_config.yml` |
 | `serena project create` | Create `.serena/project.yml` |
 | `serena project index` | Warm LSP caches |
-| `serena project health-check` | Smoke-test tools on a project |
-| `serena config edit` | Edit `serena_config.yml` |
-| `serena tools list` | List tools |
+| `serena <tool-name>` | Run an MCP tool from the terminal |
 
 ## Architecture
 

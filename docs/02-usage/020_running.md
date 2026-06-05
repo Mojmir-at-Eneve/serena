@@ -88,14 +88,14 @@ In general, add `--help` to any command or sub-command to get information about 
 Here are some examples of commands you might find useful:
 
 ```bash
-# get help about a sub-command
-serena tools list --help
+# list all CLI commands
+serena --help
 
-# list all available tools
-serena tools list --all
+# get help for a tool subcommand (mirrors an MCP tool)
+serena find-symbol --help
 
-# get detailed description of a specific tool
-serena tools description find_symbol
+# create global config (~/.serena/serena_config.yml)
+serena init
 
 # creating a new Serena project in the current directory 
 serena project create
@@ -106,14 +106,8 @@ serena project create --index
 # indexing the project in the current directory (auto-creates if needed)
 serena project index
 
-# run a health check on the project in the current directory
-serena project health-check
-
-# check if a path is ignored by the project
-serena project is_ignored_path path/to/check
-
-# edit Serena's global configuration file
-serena config edit
+# smoke-test: run a tool against the project
+serena symbols-overview src/main.py --project .
 ```
 
 Explore the full set of commands and options using the CLI itself!

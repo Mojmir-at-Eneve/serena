@@ -100,7 +100,6 @@
           } ''
           mkdir -p $out/bin
           ln -s ${packages.serena-env}/bin/serena $out/bin/serena
-          ln -s ${packages.serena-env}/bin/serena-hooks $out/bin/serena-hooks
         '';
         default = packages.serena;
       };

@@ -17,7 +17,7 @@ Run the following command to launch Serena as http server (assuming port 8000):
 
 ```bash
 uvx mcpo --port 8000 --api-key <YOUR_SECRET_KEY> -- \
-  serena start-mcp-server --transport streamable-http --project $(pwd)
+  serena start-mcp-server --project $(pwd)
 ```
 
 - `--api-key` is required to secure the server.
