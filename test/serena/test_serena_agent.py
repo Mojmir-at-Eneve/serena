@@ -1549,3 +1549,36 @@ class TestPromptProvision:
             assert "workspace" in result.lower()
         finally:
             agent.on_shutdown(timeout=5)
+
+    def test_config_overview_includes_project_paths(self, serena_config) -> None:
+        """get_current_config_overview() must show name AND path for every registered
+        project so agents can distinguish same-named copies in different locations."""
+        from unittest.mock import MagicMock, patch
+
+        from serena.config.serena_config import ProjectConfig, RegisteredProject
+
+        agent = SerenaAgent(project=None, serena_config=serena_config)
+        try:
+            # Build two fake RegisteredProject objects with the same name but different paths.
+            def _make_rp(name: str, path: str) -> RegisteredProject:
+                cfg = MagicMock(spec=ProjectConfig)
+                cfg.project_name = name
+                rp = MagicMock(spec=RegisteredProject)
+                rp.project_config = cfg
+                rp.project_root = path
+                return rp
+
+            fake_projects = [
+                _make_rp("Ecedo.ERP", "/projects/Ecedo.ERP"),
+                _make_rp("Ecedo.ERP", "/taskrabbit/Ecedo.ERP"),
+            ]
+
+            with patch.object(agent.serena_config, "projects", fake_projects):
+                overview = agent.get_current_config_overview()
+
+            # Both the project name and the distinguishing path must appear.
+            assert "Ecedo.ERP" in overview
+            assert "/projects/Ecedo.ERP" in overview
+            assert "/taskrabbit/Ecedo.ERP" in overview
+        finally:
+            agent.on_shutdown(timeout=5)

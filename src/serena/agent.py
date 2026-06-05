@@ -414,7 +414,13 @@ class SerenaAgent:
             result_str += self._active_workspace.health_summary() + "\n"
         else:
             result_str += "No active workspace\n"
-        result_str += "Available projects:\n" + "\n".join(self.serena_config.project_names) + "\n"
+        # Show name + path so agents can distinguish same-named projects registered
+        # at different locations (e.g. taskrabbit/ vs projects/ copies of Ecedo.ERP).
+        project_lines = [
+            f"  {p.project_config.project_name}  ({p.project_root})"
+            for p in self.serena_config.projects
+        ]
+        result_str += "Available projects:\n" + "\n".join(project_lines) + "\n"
         result_str += "Active tools:\n"
         for i in range(0, len(self._active_tools.tool_names), 4):
             result_str += "  " + ", ".join(self._active_tools.tool_names[i : i + 4]) + "\n"
