@@ -252,6 +252,46 @@ class TestSerenaWorkspaceDiscovery:
             project_ids = {u.project_id for u in ws.units}
             assert project_ids == set(subdirs)
 
+    def test_root_project_yml_still_discovers_children(self) -> None:
+        """
+        workspace_root/
+          .serena/project.yml   <- root project (previously blocked child discovery)
+          backend/
+            .serena/project.yml <- child project
+          frontend/
+            .serena/project.yml <- child project
+
+        All three must be discovered: root + 2 children.
+        This is the monorepo layout that was silently broken before the fix.
+        """
+        with tempfile.TemporaryDirectory() as ws_root:
+            # Root project config
+            root_serena = Path(ws_root) / ".serena"
+            root_serena.mkdir()
+            (root_serena / "project.yml").write_text("project_name: root\nlanguages: []\n")
+            # Child projects
+            for subdir in ["backend", "frontend"]:
+                child_serena = Path(ws_root) / subdir / ".serena"
+                child_serena.mkdir(parents=True)
+                (child_serena / "project.yml").write_text(
+                    f"project_name: {subdir}\nlanguages: []\n"
+                )
+
+            mock_serena_config = MagicMock()
+            mock_serena_config.get_registered_project.return_value = None
+
+            def mock_project_load(path, serena_config, autogenerate):
+                return _make_mock_project(str(path), Path(path).name)
+
+            with patch("serena.workspace.Project.load", side_effect=mock_project_load):
+                ws = SerenaWorkspace.discover_and_create(ws_root, mock_serena_config)
+
+            unit_paths = {u.workspace_relative_path for u in ws.units}
+            assert "" in unit_paths, "Root project must be discovered"
+            assert "backend" in unit_paths, "backend child must be discovered"
+            assert "frontend" in unit_paths, "frontend child must be discovered"
+            assert len(ws.units) == 3
+
     def test_single_project_fallback(self) -> None:
         """No .serena/project.yml anywhere → single root project created."""
         with tempfile.TemporaryDirectory() as ws_root:

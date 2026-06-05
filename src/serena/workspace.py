@@ -238,11 +238,11 @@ class SerenaWorkspace:
         Discovery rules
         ---------------
         1. If *workspace_root* itself contains ``.serena/project.yml``, it is
-           treated as a project unit.  We still recurse into sub-directories to
-           find nested projects (which will own themselves).
-        2. Any sub-directory that contains ``.serena/project.yml`` becomes a
-           ProjectUnit.  Recursion stops at that level — the project owns its
-           subtree.
+           treated as a project unit and recursion continues into children so
+           that nested projects are also discovered.
+        2. Any **non-root** sub-directory that contains ``.serena/project.yml``
+           becomes a ProjectUnit.  Recursion stops at that level — the project
+           owns its subtree.
         3. Directories in ``_SKIP_DIRS`` or starting with ``.`` are not scanned.
         4. If no project files are found anywhere, the workspace root is
            auto-generated as a single project (preserves backward compatibility).
@@ -308,9 +308,12 @@ class SerenaWorkspace:
 
         if has_project:
             discovered.append((current_dir, ws_rel))
-            # Do NOT recurse further — this project owns its subtree.
-            # (Per plan: "the lower projects handle their stuff")
-            return
+            if ws_rel:
+                # Non-root project owns its subtree; do not recurse further.
+                # (Per design: "the lower projects handle their stuff")
+                return
+            # Workspace root may have its own project.yml AND nested children —
+            # continue scanning so children are also registered as units.
 
         if depth >= max_depth:
             return
