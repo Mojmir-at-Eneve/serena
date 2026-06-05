@@ -237,6 +237,33 @@ class TestProjectIndex:
             shutil.rmtree(dir2, ignore_errors=True)
 
 
+    def test_create_warns_when_children_have_serena_configs(self, cli_runner, temp_project_dir):
+        """Creating a root project.yml when children already have .serena/project.yml must
+        emit a visible warning so users understand the monorepo layout implications."""
+        # Pre-populate two child dirs with their own .serena/project.yml
+        for child in ["alpha", "beta"]:
+            child_serena = Path(temp_project_dir) / child / ".serena"
+            child_serena.mkdir(parents=True)
+            (child_serena / "project.yml").write_text(f"project_name: {child}\nlanguages: []\n")
+
+        result = cli_runner.invoke(ProjectCommands.create, [temp_project_dir, "--language", "python"])
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+        assert "Warning" in result.output
+        assert ".serena/project.yml" in result.output
+        # Both child names must appear in the warning
+        assert "alpha" in result.output
+        assert "beta" in result.output
+
+    def test_create_no_warning_when_no_children_have_serena_configs(self, cli_runner, temp_project_dir):
+        """No warning should appear when no child directories have .serena/project.yml."""
+        # Add a plain directory (no .serena) to ensure the check doesn't over-trigger
+        (Path(temp_project_dir) / "src").mkdir()
+
+        result = cli_runner.invoke(ProjectCommands.create, [temp_project_dir, "--language", "python"])
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+        assert "Warning" not in result.output
+
+
 class TestProjectCreateHelper:
     """Tests for _create_project helper method."""
 

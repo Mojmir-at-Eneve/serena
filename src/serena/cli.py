@@ -41,7 +41,7 @@ from tqdm import tqdm
 
 from serena import serena_version
 from serena.config.serena_config import LanguageBackend, ProjectConfig, RegisteredProject, SerenaConfig, SerenaPaths
-from serena.constants import SERENA_LOG_FORMAT
+from serena.constants import SERENA_LOG_FORMAT, SERENA_MANAGED_DIR_NAME
 from serena.util.cli_util import AutoRegisteringGroup
 from serena.util.logging import MemoryLogHandler
 from solidlsp.ls_config import Language
@@ -762,6 +762,26 @@ def _create_project(project_path: str, name: str | None, language: tuple[str, ..
     )
     languages_str = ", ".join([lang.value for lang in generated_conf.languages]) if generated_conf.languages else "N/A"
     click.echo(f"Generated project with languages {{{languages_str}}} at {yml_path}.")
+
+    # Warn when immediate children already have .serena/project.yml configs.
+    # Creating a root-level config on top of an existing monorepo layout can confuse
+    # users who expect only the child projects — point them at the intended workflow.
+    child_configs = [
+        entry.name
+        for entry in sorted(project_root.iterdir())
+        if entry.is_dir()
+        and (entry / SERENA_MANAGED_DIR_NAME / ProjectConfig.SERENA_PROJECT_FILE).exists()
+    ]
+    if child_configs:
+        click.echo(
+            f"Warning: {len(child_configs)} child director{'y' if len(child_configs) == 1 else 'ies'} "
+            f"already ha{'s' if len(child_configs) == 1 else 've'} .serena/project.yml "
+            f"({', '.join(child_configs)}). "
+            "Activating this parent will load all of them alongside the root project. "
+            "If you only want the monorepo model (parent activates children, no root config), "
+            "remove this root project.yml and activate the parent directory directly."
+        )
+
     registered_project = serena_config.get_registered_project(str(project_root))
     if registered_project is None:
         registered_project = RegisteredProject(str(project_root), generated_conf)
