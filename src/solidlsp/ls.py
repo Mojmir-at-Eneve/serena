@@ -3261,6 +3261,44 @@ class SolidLanguageServer(ABC):
         with self.open_file(relative_file_path):
             return self.server.send.rename(params)
 
+    def request_prepare_rename(
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+    ) -> dict | None:
+        """
+        Raise a [textDocument/prepareRename](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareRename)
+        request to check whether the symbol at the given position can be renamed.
+
+        The language server returns either:
+        - A ``Range`` or ``{range, placeholder}`` dict if rename is possible, or
+        - ``None`` / an LSP error if the position is not renameable (e.g. a keyword,
+          literal, or compiler-generated symbol).
+
+        This is called silently by ``rename_symbol`` before the actual rename to provide
+        a fast-fail with a clear error message instead of a confusing rename-with-no-changes.
+
+        :param relative_file_path: file containing the symbol usage
+        :param line: 0-indexed line
+        :param column: 0-indexed column
+        :return: the valid rename range dict, or None if rename is not supported here
+        """
+        if not self.server_started:
+            raise SolidLSPException("Language Server not started")
+        with self.open_file(relative_file_path):
+            params: dict = {
+                "textDocument": {"uri": self._resolve_file_uri(relative_file_path)},
+                "position": {"line": line, "character": column},
+            }
+            try:
+                result = self.server.send.prepare_rename(params)
+            except Exception as exc:
+                # LSP errors from prepareRename mean the position is not renameable
+                log.debug("prepareRename returned an error at %s:%s:%s: %s", relative_file_path, line, column, exc)
+                return None
+        return result  # may be a Range dict, a {range, placeholder} dict, or None
+
     def apply_text_edits_to_file(self, relative_path: str, edits: list[ls_types.TextEdit]) -> None:
         """
         Apply a list of text edits to a file.

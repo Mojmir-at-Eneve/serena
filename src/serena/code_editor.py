@@ -387,6 +387,19 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
             return "DRY RUN — target symbol resolved (no rename applied):\n" + json.dumps(resolved_info, indent=2)
 
         lang_server = self._get_language_server(relative_path)
+
+        # prepareRename pre-check: fast-fail with a clear error before attempting the rename
+        # if the language server signals the position is not renameable (e.g. a keyword,
+        # a compiler-generated member, or a literal).
+        prepare_result = lang_server.request_prepare_rename(
+            relative_path, symbol.location.line, symbol.location.column
+        )
+        if prepare_result is None:
+            raise ValueError(
+                f"prepareRename returned None at {relative_path}:{symbol.location.line}:{symbol.location.column} "
+                f"for symbol '{symbol.get_name_path()}': the language server indicates this position cannot be renamed."
+            )
+
         rename_result = lang_server.request_rename_symbol_edit(
             relative_file_path=relative_path, line=symbol.location.line, column=symbol.location.column, new_name=new_name
         )

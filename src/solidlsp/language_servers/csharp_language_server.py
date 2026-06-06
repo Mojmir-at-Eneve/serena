@@ -555,6 +555,9 @@ class CSharpLanguageServer(SolidLanguageServer):
                             },
                             "resolveSupport": {"properties": ["edit", "command"]},
                         },
+                        # textDocument/prepareRename: fast pre-check before rename_symbol to
+                        # fail fast with a clear message if the position is not renameable.
+                        "rename": {"dynamicRegistration": True, "prepareSupport": True},
                     },
                 },
             },

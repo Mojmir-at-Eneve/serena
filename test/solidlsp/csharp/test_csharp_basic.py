@@ -221,6 +221,41 @@ class TestCSharpLanguageServer:
             assert "title" in action, f"Each code action should have a 'title' key, got: {action}"
 
     @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_prepare_rename_valid(self, language_server: SolidLanguageServer) -> None:
+        """Test that prepareRename returns a non-None result for a renameable symbol.
+
+        Calculator.Add is defined on file line 23 (0-indexed 22), name at column 19.
+        prepareRename should return a range dict confirming it can be renamed.
+        """
+        file_path = "Program.cs"
+        language_server.open_file(file_path)
+
+        # 0-indexed line 22, col 19 = `Add` method name
+        result = language_server.request_prepare_rename(file_path, line=22, column=19)
+
+        assert result is not None, "prepareRename should return a range for a valid symbol like Calculator.Add"
+        # The result is either a Range dict or a {range, placeholder} dict
+        assert isinstance(result, dict), f"prepareRename result should be a dict, got: {type(result)}"
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_prepare_rename_keyword_returns_none(self, language_server: SolidLanguageServer) -> None:
+        """Test that prepareRename returns None when pointed at a keyword or non-renameable token.
+
+        `public` on line 22 of Program.cs (col 8) is a keyword; it cannot be renamed.
+        prepareRename should return None or an error, which our wrapper normalises to None.
+        """
+        file_path = "Program.cs"
+        language_server.open_file(file_path)
+
+        # 0-indexed line 22, col 8 = `public` keyword in `        public int Add(int a, int b)`
+        result = language_server.request_prepare_rename(file_path, line=22, column=8)
+
+        # Keywords are not renameable; Roslyn should return an error/null which maps to None
+        assert result is None, (
+            f"prepareRename on a keyword ('public') should return None, got: {result}"
+        )
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
     def test_hover_includes_type_information(self, language_server: SolidLanguageServer) -> None:
         """Test that hover information is available and includes type information."""
         file_path = os.path.join("Models", "Person.cs")
