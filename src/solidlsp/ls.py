@@ -3117,7 +3117,7 @@ class SolidLanguageServer(ABC):
 
     def request_call_hierarchy_prepare(
         self, relative_file_path: str, line: int, column: int
-    ) -> list[ls_types.CallHierarchyItem]:
+    ) -> list[lsp_types.CallHierarchyItem]:
         """
         Raise a [textDocument/prepareCallHierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareCallHierarchy)
         request to get the ``CallHierarchyItem`` at the given position.
@@ -3141,8 +3141,8 @@ class SolidLanguageServer(ABC):
         return result or []
 
     def request_incoming_calls(
-        self, item: ls_types.CallHierarchyItem
-    ) -> list[ls_types.CallHierarchyIncomingCall]:
+        self, item: lsp_types.CallHierarchyItem
+    ) -> list[lsp_types.CallHierarchyIncomingCall]:
         """
         Raise a [callHierarchy/incomingCalls](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_incomingCalls)
         request — returns the direct callers of the given call hierarchy item.
@@ -3156,8 +3156,8 @@ class SolidLanguageServer(ABC):
         return result or []
 
     def request_outgoing_calls(
-        self, item: ls_types.CallHierarchyItem
-    ) -> list[ls_types.CallHierarchyOutgoingCall]:
+        self, item: lsp_types.CallHierarchyItem
+    ) -> list[lsp_types.CallHierarchyOutgoingCall]:
         """
         Raise a [callHierarchy/outgoingCalls](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_outgoingCalls)
         request — returns the direct callees of the given call hierarchy item.
