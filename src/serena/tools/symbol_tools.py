@@ -27,6 +27,7 @@ from serena.tools.tools_base import (
     SUCCESS_RESULT,
     EditingToolWithDiagnostics,
     Tool,
+    ToolMarkerCanEdit,
     ToolMarkerOptional,
     ToolMarkerSymbolicEdit,
     ToolMarkerSymbolicRead,
@@ -1102,3 +1103,58 @@ class DeleteSymbolTool(Tool, ToolMarkerSymbolicEdit):
         code_editor = self.create_ls_code_editor()
         code_editor.delete_symbol(symbol_name_path, relative_file_path=symbol_rel_path)
         return SUCCESS_RESULT
+
+
+class GetCodeActionsTool(Tool, ToolMarkerCanEdit):
+    """
+    List or apply code actions offered by the language server at a symbol's location.
+
+    In list mode (no ``action_title``), returns the available action titles so the agent
+    can decide which to apply.  In apply mode (``action_title`` provided), finds the
+    first action whose title contains the given string and applies it — adding imports,
+    generating method stubs, fixing diagnostics, etc.
+
+    Because applying an action modifies files, this tool is always marked as a write
+    tool regardless of whether an ``action_title`` is provided.
+    """
+
+    def apply(
+        self,
+        relative_path: str,
+        regex: str,
+        action_title: str | None = None,
+        max_answer_chars: int = -1,
+    ) -> str:
+        r"""
+        List or apply language server code actions at the line matched by the regex.
+
+        Provide a regex that matches somewhere on the target line.  In list mode,
+        all actions available at that line are returned as a JSON array so the agent
+        can choose the right one.  In apply mode, the first action whose title
+        contains ``action_title`` (case-insensitive) is resolved and applied.
+
+        :param relative_path: file to query for code actions.
+        :param regex: regex matching any text on the target line.
+        :param action_title: substring of the action title to apply (e.g. ``"Add import"``).
+            If omitted, all available actions are listed.
+        :param max_answer_chars: cap on result size (list mode only); -1 uses the default.
+        :return: JSON array of ``{title, kind}`` objects (list mode) or a status
+            message describing what was applied (apply mode).
+        """
+        relative_path = self._sanitize_input_param(relative_path)
+        regex = self._sanitize_input_param(regex)
+        unit, proj_rel = self.resolve_project(relative_path)
+        editor = self.create_ls_code_editor_for(unit.project)
+
+        content = editor.read_file(proj_rel)
+        match_coords = find_all_text_coordinates(content, regex)
+        if not match_coords:
+            raise ValueError(f"No match found for regex {regex!r} in {relative_path}")
+
+        # Use the first match line; the agent can refine the regex to pick a different line
+        target_line = match_coords[0].line
+        result = editor.get_code_actions(proj_rel, line=target_line, action_title=action_title)
+        if action_title is None:
+            return self._limit_length(result, max_answer_chars)
+        return result
+

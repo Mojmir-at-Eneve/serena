@@ -536,6 +536,25 @@ class CSharpLanguageServer(SolidLanguageServer):
                         # textDocument/prepareCallHierarchy + callHierarchy/incomingCalls +
                         # callHierarchy/outgoingCalls: trace who calls a method and what it calls.
                         "callHierarchy": {"dynamicRegistration": True},
+                        # textDocument/codeAction: request refactor/fix actions; resolveSupport
+                        # tells Roslyn it may return lazy actions (no edit yet) that we will resolve.
+                        "codeAction": {
+                            "dynamicRegistration": True,
+                            "codeActionLiteralSupport": {
+                                "codeActionKind": {
+                                    "valueSet": [
+                                        "quickfix",
+                                        "refactor",
+                                        "refactor.extract",
+                                        "refactor.inline",
+                                        "refactor.rewrite",
+                                        "source",
+                                        "source.organizeImports",
+                                    ]
+                                }
+                            },
+                            "resolveSupport": {"properties": ["edit", "command"]},
+                        },
                     },
                 },
             },

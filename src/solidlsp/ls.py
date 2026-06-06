@@ -3170,6 +3170,44 @@ class SolidLanguageServer(ABC):
         result = self.server.send.outgoing_calls({"item": item})
         return result or []
 
+    def request_code_actions(
+        self,
+        relative_file_path: str,
+        start_line: int,
+        start_col: int,
+        end_line: int,
+        end_col: int,
+    ) -> list[dict]:
+        """
+        Raise a [textDocument/codeAction](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_codeAction)
+        request for the given range in a file.
+
+        Returns a mix of ``Command`` and ``CodeAction`` objects as raw dicts.
+        Use ``resolve_code_action`` (via ``server.send``) to fill in lazy ``edit``
+        fields before applying, then ``_apply_workspace_edit`` to apply the edit.
+
+        :param relative_file_path: file to query actions for
+        :param start_line: 0-indexed start line of the selection range
+        :param start_col: 0-indexed start column
+        :param end_line: 0-indexed end line
+        :param end_col: 0-indexed end column
+        :return: list of code action / command dicts
+        """
+        if not self.server_started:
+            raise SolidLSPException("Language Server not started")
+        with self.open_file(relative_file_path):
+            params: dict = {
+                "textDocument": {"uri": self._resolve_file_uri(relative_file_path)},
+                "range": {
+                    "start": {"line": start_line, "character": start_col},
+                    "end": {"line": end_line, "character": end_col},
+                },
+                # triggerKind 1 = Invoked (explicit user/agent request), not auto-triggered
+                "context": {"diagnostics": [], "triggerKind": 1},
+            }
+            result = self.server.send.code_action(params)
+        return result or []
+
     def request_workspace_symbol(self, query: str) -> list[ls_types.UnifiedSymbolInformation] | None:
         """
         Raise a [workspace/symbol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol) request to the Language Server

@@ -203,6 +203,24 @@ class TestCSharpLanguageServer:
         )
 
     @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_code_actions_list(self, language_server: SolidLanguageServer) -> None:
+        """Test that request_code_actions returns a list (possibly empty) of valid action dicts.
+
+        Requests actions on the Calculator.Add signature line (0-indexed 22) in Program.cs.
+        Each returned action must have a 'title' key.
+        """
+        file_path = "Program.cs"
+        language_server.open_file(file_path)
+
+        # 0-indexed line 22 = file line 23: `        public int Add(int a, int b)`
+        actions = language_server.request_code_actions(file_path, start_line=22, start_col=0, end_line=22, end_col=9999)
+
+        assert isinstance(actions, list), "request_code_actions should return a list"
+        for action in actions:
+            assert isinstance(action, dict), f"Each code action should be a dict, got: {type(action)}"
+            assert "title" in action, f"Each code action should have a 'title' key, got: {action}"
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
     def test_hover_includes_type_information(self, language_server: SolidLanguageServer) -> None:
         """Test that hover information is available and includes type information."""
         file_path = os.path.join("Models", "Person.cs")

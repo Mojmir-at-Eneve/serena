@@ -407,3 +407,76 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
             f"Resolved symbol:\n{json.dumps(resolved_info, indent=2)}"
         )
         return msg
+
+    def get_code_actions(
+        self,
+        relative_path: str,
+        line: int,
+        action_title: str | None = None,
+    ) -> str:
+        """
+        List or apply code actions offered by the language server at the given line.
+
+        When called without ``action_title``, returns a JSON list of available action
+        titles (and kinds) so the agent can pick one.  When ``action_title`` is given,
+        finds the first action whose title contains that string (case-insensitive),
+        resolves its ``edit``/``command`` lazily if needed, and applies it.
+
+        :param relative_path: file to query for code actions.
+        :param line: 0-indexed line number to use as the action range.
+        :param action_title: substring to match against action titles; if None, lists actions.
+        :return: JSON list of actions (list mode) or a status message (apply mode).
+        """
+        lang_server = self._get_language_server(relative_path)
+        # Use a single-line range at the requested line (end_col 9999 covers the whole line)
+        actions = lang_server.request_code_actions(
+            relative_path, start_line=line, start_col=0, end_line=line, end_col=9999
+        )
+
+        if not actions:
+            return f"No code actions available at line {line} of {relative_path}."
+
+        if action_title is None:
+            # List mode: return human-readable summaries for the agent to choose from
+            action_list = []
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                entry: dict = {"title": action.get("title", "<no title>")}
+                if kind := action.get("kind"):
+                    entry["kind"] = kind
+                action_list.append(entry)
+            return json.dumps(action_list, indent=2)
+
+        # Apply mode: find the matching action
+        matched = [a for a in actions if isinstance(a, dict) and action_title.lower() in a.get("title", "").lower()]
+        if not matched:
+            available = [a.get("title", "") for a in actions if isinstance(a, dict)]
+            raise ValueError(
+                f"No code action matching '{action_title}' found at line {line} in {relative_path}.\n"
+                f"Available actions: {available}"
+            )
+        action = matched[0]
+
+        # Resolve the action lazily if it has neither edit nor command yet
+        if "edit" not in action and "command" not in action:
+            try:
+                resolved = lang_server.server.send.resolve_code_action(action)
+                if resolved:
+                    action = resolved
+            except Exception as exc:
+                log.warning("Code action resolve failed (%s); proceeding with original action", exc)
+
+        n_changes = 0
+        if edit := action.get("edit"):
+            n_changes += self._apply_workspace_edit(edit)
+        if command := action.get("command"):
+            try:
+                lang_server.server.send.execute_command(command)
+                n_changes += 1
+            except Exception as exc:
+                log.warning("Code action execute_command failed: %s", exc)
+
+        if n_changes == 0:
+            return f"Code action '{action.get('title')}' resolved but produced no changes."
+        return f"Applied code action '{action.get('title')}' ({n_changes} edit operations)."
