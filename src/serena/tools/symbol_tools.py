@@ -696,6 +696,62 @@ class FindTypeDefinitionTool(Tool, ToolMarkerSymbolicRead):
         return result_json
 
 
+class GetCallHierarchyTool(Tool, ToolMarkerSymbolicRead):
+    """
+    Builds a call hierarchy tree for a symbol: who calls it (incoming) and/or
+    what it calls (outgoing), up to a configurable depth.
+
+    Invaluable for debugging and tracing: find all callers of a method before
+    changing its signature, or trace the full call chain from an entry point.
+    Works with any language server that supports callHierarchy (e.g. C# Roslyn).
+    """
+
+    def apply(
+        self,
+        name_path: str,
+        relative_path: str,
+        direction: Literal["incoming", "outgoing", "both"] = "both",
+        depth: int = 2,
+        max_answer_chars: int = -1,
+    ) -> str:
+        """
+        Build a call hierarchy tree rooted at the given symbol.
+
+        :param name_path: name path of the symbol to inspect (e.g. ``Calculator/Add``).
+        :param relative_path: file containing the symbol.
+        :param direction: ``"incoming"`` returns callers, ``"outgoing"`` returns callees,
+            ``"both"`` returns the full tree in both directions.
+        :param depth: how many levels deep to recurse (1–9, default 2). The agent may
+            pass higher values to trace long call chains.
+        :param max_answer_chars: cap on result size; -1 uses the configured default.
+        :return: JSON tree with nodes carrying name, kind, relative_path, line, and
+            optionally callers / callees sub-arrays.
+        """
+        unit, proj_rel = self.resolve_project(relative_path)
+        symbol_retriever = self.create_language_server_symbol_retriever_for(unit.project)
+
+        # Resolve the symbol to get its file position so we can anchor the call hierarchy
+        symbol = symbol_retriever.find_unique(name_path_pattern=name_path, within_relative_path=proj_rel)
+        sym_line = symbol.line
+        sym_col = symbol.column
+        if sym_line is None or sym_col is None:
+            return f"Error: symbol '{name_path}' has no resolved position (line={sym_line}, col={sym_col})."
+
+        tree = symbol_retriever.get_call_hierarchy(
+            relative_file_path=proj_rel,
+            line=sym_line,
+            column=sym_col,
+            direction=direction,
+            depth=depth,
+        )
+
+        if not tree:
+            return f"No call hierarchy found for '{name_path}'. The language server may not support callHierarchy for this symbol."
+
+        result_json = self._to_json(tree)
+        return self._limit_length(result_json, max_answer_chars)
+
+
 class SearchWorkspaceSymbolsTool(Tool, ToolMarkerSymbolicRead):
     """
     Fast fuzzy search for symbols across the whole workspace using the language server's

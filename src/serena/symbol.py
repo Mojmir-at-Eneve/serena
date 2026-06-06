@@ -1138,6 +1138,93 @@ class LanguageServerSymbolRetriever:
             return None
         return LanguageServerSymbol(type_symbol)
 
+    def get_call_hierarchy(
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+        direction: Literal["incoming", "outgoing", "both"] = "both",
+        depth: int = 2,
+    ) -> list[dict[str, Any]]:
+        """
+        Build a call hierarchy tree rooted at the symbol at the given position.
+
+        Calls ``textDocument/prepareCallHierarchy`` to anchor the query, then
+        recursively expands callers (incoming) and/or callees (outgoing) up to
+        ``depth`` levels. A visited set prevents infinite loops from mutual recursion.
+
+        :param relative_file_path: file containing the root symbol.
+        :param line: 0-based line of the root symbol.
+        :param column: 0-based column of the root symbol.
+        :param direction: ``"incoming"`` (callers), ``"outgoing"`` (callees), or ``"both"``.
+        :param depth: max recursion depth (1–9, default 2).
+        :return: list of tree-node dicts with keys name, kind, relative_path, line,
+            and optionally callers / callees.
+        """
+        depth = max(1, min(9, depth))
+        lang_server = self.get_language_server(relative_file_path)
+        anchors = lang_server.request_call_hierarchy_prepare(relative_file_path, line, column)
+        if not anchors:
+            return []
+        return [self._expand_call_hierarchy_node(item, lang_server, direction, depth, visited=set()) for item in anchors]
+
+    def _expand_call_hierarchy_node(
+        self,
+        item: dict[str, Any],
+        lang_server: SolidLanguageServer,
+        direction: str,
+        remaining_depth: int,
+        visited: set[str],
+    ) -> dict[str, Any]:
+        """Recursively build one node of the call hierarchy tree.
+
+        Uses URI + name as the deduplication key to break mutual-recursion cycles.
+        """
+        from solidlsp.ls_utils import PathUtils
+
+        uri = item.get("uri", "")
+        name = item.get("name", "")
+        node_key = f"{uri}::{name}"
+
+        # Resolve the URI to a project-relative path for human readability
+        try:
+            abs_path = PathUtils.uri_to_path(uri)
+            rel_path: str | None = PathUtils.get_relative_path(abs_path, lang_server.repository_root_path)
+        except Exception:
+            rel_path = uri  # fall back to raw URI if resolution fails
+
+        sel_range = item.get("selectionRange") or {}
+        start = sel_range.get("start") or {}
+        kind_name = SymbolKind(item.get("kind", 0)).name
+
+        node: dict[str, Any] = {
+            "name": name,
+            "kind": kind_name,
+            "relative_path": rel_path,
+            "line": start.get("line"),
+        }
+        if detail := item.get("detail"):
+            node["detail"] = detail
+
+        if remaining_depth > 0 and node_key not in visited:
+            next_visited = visited | {node_key}
+            if direction in ("incoming", "both"):
+                callers = [
+                    self._expand_call_hierarchy_node(call["from"], lang_server, direction, remaining_depth - 1, next_visited)
+                    for call in lang_server.request_incoming_calls(item)
+                ]
+                if callers:
+                    node["callers"] = callers
+            if direction in ("outgoing", "both"):
+                callees = [
+                    self._expand_call_hierarchy_node(call["to"], lang_server, direction, remaining_depth - 1, next_visited)
+                    for call in lang_server.request_outgoing_calls(item)
+                ]
+                if callees:
+                    node["callees"] = callees
+
+        return node
+
     def get_file_diagnostics(
         self,
         relative_file_path: str,

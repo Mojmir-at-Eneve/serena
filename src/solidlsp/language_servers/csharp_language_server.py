@@ -533,6 +533,9 @@ class CSharpLanguageServer(SolidLanguageServer):
                             "symbolKind": {"valueSet": list(range(1, 27))},
                             "hierarchicalDocumentSymbolSupport": True,
                         },
+                        # textDocument/prepareCallHierarchy + callHierarchy/incomingCalls +
+                        # callHierarchy/outgoingCalls: trace who calls a method and what it calls.
+                        "callHierarchy": {"dynamicRegistration": True},
                     },
                 },
             },

@@ -3115,6 +3115,61 @@ class SolidLanguageServer(ABC):
         self._save_raw_document_symbols_cache()
         self._save_document_symbols_cache()
 
+    def request_call_hierarchy_prepare(
+        self, relative_file_path: str, line: int, column: int
+    ) -> list[ls_types.CallHierarchyItem]:
+        """
+        Raise a [textDocument/prepareCallHierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareCallHierarchy)
+        request to get the ``CallHierarchyItem`` at the given position.
+
+        The returned items are anchors for subsequent ``request_incoming_calls`` /
+        ``request_outgoing_calls`` calls.
+
+        :param relative_file_path: file containing the symbol
+        :param line: 0-indexed line
+        :param column: 0-indexed column
+        :return: list of CallHierarchyItem anchors (usually one)
+        """
+        if not self.server_started:
+            raise SolidLSPException("Language Server not started")
+        with self.open_file(relative_file_path):
+            params: dict = {
+                "textDocument": {"uri": self._resolve_file_uri(relative_file_path)},
+                "position": {"line": line, "character": column},
+            }
+            result = self.server.send.prepare_call_hierarchy(params)
+        return result or []
+
+    def request_incoming_calls(
+        self, item: ls_types.CallHierarchyItem
+    ) -> list[ls_types.CallHierarchyIncomingCall]:
+        """
+        Raise a [callHierarchy/incomingCalls](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_incomingCalls)
+        request — returns the direct callers of the given call hierarchy item.
+
+        :param item: a ``CallHierarchyItem`` obtained from ``request_call_hierarchy_prepare``
+        :return: list of incoming calls (each has a ``from`` item and call-site ranges)
+        """
+        if not self.server_started:
+            raise SolidLSPException("Language Server not started")
+        result = self.server.send.incoming_calls({"item": item})
+        return result or []
+
+    def request_outgoing_calls(
+        self, item: ls_types.CallHierarchyItem
+    ) -> list[ls_types.CallHierarchyOutgoingCall]:
+        """
+        Raise a [callHierarchy/outgoingCalls](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#callHierarchy_outgoingCalls)
+        request — returns the direct callees of the given call hierarchy item.
+
+        :param item: a ``CallHierarchyItem`` obtained from ``request_call_hierarchy_prepare``
+        :return: list of outgoing calls (each has a ``to`` item and call-site ranges)
+        """
+        if not self.server_started:
+            raise SolidLSPException("Language Server not started")
+        result = self.server.send.outgoing_calls({"item": item})
+        return result or []
+
     def request_workspace_symbol(self, query: str) -> list[ls_types.UnifiedSymbolInformation] | None:
         """
         Raise a [workspace/symbol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol) request to the Language Server

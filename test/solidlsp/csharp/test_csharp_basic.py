@@ -159,6 +159,50 @@ class TestCSharpLanguageServer:
         )
 
     @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_call_hierarchy_incoming(self, language_server: SolidLanguageServer) -> None:
+        """Test incoming call hierarchy: callers of Calculator.Add should include Program.Main.
+
+        Program.cs line 13 (0-indexed 12): `int result = calculator.Add(5, 3);`
+        Calculator.Add is defined on file line 23 (0-indexed 22).
+        `Add` method name starts at column 19 within `        public int Add(int a, int b)`.
+        """
+        file_path = "Program.cs"
+        language_server.open_file(file_path)
+
+        # Prepare call hierarchy at Calculator.Add (0-indexed line 22, col 19)
+        items = language_server.request_call_hierarchy_prepare(file_path, line=22, column=19)
+        assert items, "prepareCallHierarchy should return items for Calculator.Add"
+
+        incoming = language_server.request_incoming_calls(items[0])
+        assert incoming, "Calculator.Add should have at least one incoming caller"
+        caller_names = [call.get("from", {}).get("name", "") for call in incoming]
+        assert any("Main" in name for name in caller_names), (
+            f"Expected 'Main' among callers of Calculator.Add, got: {caller_names}"
+        )
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
+    def test_call_hierarchy_outgoing(self, language_server: SolidLanguageServer) -> None:
+        """Test outgoing call hierarchy: Person.CalculateYearsUntilRetirement calls Calculator.Subtract.
+
+        Models/Person.cs file line 28 (0-indexed 27):
+        `        public int CalculateYearsUntilRetirement()`
+        Method name starts at column 19.
+        """
+        file_path = os.path.join("Models", "Person.cs")
+        language_server.open_file(file_path)
+
+        # Prepare call hierarchy at CalculateYearsUntilRetirement (0-indexed line 27, col 19)
+        items = language_server.request_call_hierarchy_prepare(file_path, line=27, column=19)
+        assert items, "prepareCallHierarchy should return items for CalculateYearsUntilRetirement"
+
+        outgoing = language_server.request_outgoing_calls(items[0])
+        assert outgoing, "CalculateYearsUntilRetirement should have at least one outgoing call"
+        callee_names = [call.get("to", {}).get("name", "") for call in outgoing]
+        assert any("Subtract" in name for name in callee_names), (
+            f"Expected 'Subtract' among callees of CalculateYearsUntilRetirement, got: {callee_names}"
+        )
+
+    @pytest.mark.parametrize("language_server", [Language.CSHARP], indirect=True)
     def test_hover_includes_type_information(self, language_server: SolidLanguageServer) -> None:
         """Test that hover information is available and includes type information."""
         file_path = os.path.join("Models", "Person.cs")
